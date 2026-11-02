@@ -1,0 +1,10 @@
+git:x:@GID@:
+root:x:@GID@:
+gitlab-www:x:@GID@:
+gitlab-redis:x:@GID@:
+gitlab-psql:x:@GID@:
+registry:x:@GID@:
+gitlab-prometheus:x:@GID@:
+gitlab-consul:x:@GID@:
+gitlab-backup:x:@GID@:
+nogroup:x:65534:

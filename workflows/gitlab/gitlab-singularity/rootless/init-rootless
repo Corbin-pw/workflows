@@ -1,0 +1,104 @@
+#!/bin/bash
+# Entrypoint of the single-user image: what /assets/init-container does as
+# root, done as the unprivileged account the container runs as. The three
+# volumes (/etc/gitlab, /var/opt/gitlab, /var/log/gitlab) are the user's; what
+# the package writes under /opt/gitlab goes through symlinks into
+# /var/opt/gitlab/.rootless (gitlab.def), seeded here from the image's copies.
+#
+# Environment: GITLAB_OMNIBUS_CONFIG (Ruby, evaluated by every reconfigure),
+# GITLAB_SKIP_TAIL_LOGS=true to keep the package's logs out of this output.
+
+set -o pipefail
+export PATH=/opt/gitlab/bin:/opt/gitlab/embedded/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/var/opt/gitlab
+
+log() {
+    echo "[init-rootless] $*"
+}
+
+if [ "$(id -u)" -eq 0 ]; then
+    log "this entrypoint runs as an unprivileged user; as root use /assets/init-container"
+    exit 1
+fi
+if [ "$(id -un)" != git ]; then
+    log "the container's /etc/passwd must name uid $(id -u) git first (bind the generated passwd and group files, see /assets/rootless/passwd.in)"
+    exit 1
+fi
+
+redirect_root=/var/opt/gitlab/.rootless
+dist=/opt/gitlab/.rootless-dist
+for d in sv service init etc var nodes embedded-etc chef-cache ssl-certs; do
+    mkdir -p "${redirect_root}/${d}"
+done
+mkdir -p /var/log/gitlab/reconfigure
+# The image's own files are root's: copies, not ownership
+cp -Rn --preserve=mode,timestamps "${dist}/etc/." "${redirect_root}/etc/"
+cp -Rn --preserve=mode,timestamps "${dist}/ssl-certs/." "${redirect_root}/ssl-certs/"
+for f in dna.json structure.sql; do
+    if ! [ -e "${redirect_root}/${f}" ]; then
+        cp --preserve=mode,timestamps "${dist}/${f}" "${redirect_root}/${f}"
+    fi
+done
+
+source /RELEASE
+log "GitLab ${RELEASE_PACKAGE} ${RELEASE_VERSION}, running as $(id -u):$(id -g)"
+
+# A previous instance leaves pid files and sockets behind, and the service
+# definitions' supervise/ directories (they live in the data volume here, not
+# in a container layer that a restart would renew): with a stale supervise/ok
+# fifo in place the configuration run skips its wait for runsv and runs sv
+# within the seconds before runsvdir has scanned the new service link
+# ("runsv not running"); without it, it waits as on a first start
+for x in /opt/gitlab/sv/ /var/opt/gitlab/; do
+    find "${x}" -maxdepth 4 \( -type f -o -type s \) \( -name pid -o -name '*.pid' -o -name 'socket.?' \) -delete 2>/dev/null
+done
+rm -rf /opt/gitlab/sv/*/supervise /opt/gitlab/sv/*/log/supervise
+
+if old_version=$(cat /var/opt/gitlab/gitlab-rails/VERSION 2>/dev/null); then
+    new_version=$(awk '/^gitlab-(ce|ee|jh)/ {print $NF}' /opt/gitlab/version-manifest.txt)
+    if ! gitlab-ctl upgrade-check "${old_version}" "${new_version}"; then
+        exit 1
+    fi
+fi
+
+if ! [ -e /etc/gitlab/gitlab.rb ]; then
+    log "installing gitlab.rb"
+    cp /opt/gitlab/etc/gitlab.rb.template /etc/gitlab/gitlab.rb
+    chmod 0600 /etc/gitlab/gitlab.rb
+fi
+
+if [ -n "${GITLAB_PRE_RECONFIGURE_SCRIPT+x}" ]; then
+    log "running the pre-reconfigure script"
+    eval "${GITLAB_PRE_RECONFIGURE_SCRIPT}"
+fi
+
+# The reconfigure creates the services; the supervisor must already be
+# running to pick them up
+rm -f /opt/gitlab/service/*
+umask 022
+stop() {
+    log "stopping GitLab's services"
+    gitlab-ctl stop
+    exit 0
+}
+trap stop TERM INT
+env -i PATH="${PATH}" runsvdir -P /opt/gitlab/service 'log: ...........................................................................................................................................................................................................................................................................................................................................................................................................' &
+runsvdir_pid=$!
+
+log "configuring GitLab"
+if ! gitlab-ctl reconfigure; then
+    log "the configuration run failed (its log is in /var/log/gitlab/reconfigure)"
+    gitlab-ctl stop
+    exit 1
+fi
+
+if [ -n "${GITLAB_POST_RECONFIGURE_SCRIPT+x}" ]; then
+    log "running the post-reconfigure script"
+    eval "${GITLAB_POST_RECONFIGURE_SCRIPT}"
+fi
+
+if [ "${GITLAB_SKIP_TAIL_LOGS}" != true ]; then
+    gitlab-ctl tail &
+fi
+
+wait "${runsvdir_pid}"

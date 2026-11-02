@@ -2,3 +2,5 @@ date,phase,result,cleanup,workflow_tree,submitter_tree,tools_tree,commit,fetched
 2026-10-28T16:15:52Z,warm,pass,ok,1bdae8f,162207a,727fc42,c6f6f1f,c6f6f1f,gitlab,alvaro,lucky-monkey,334,
 2026-10-29T09:09:09Z,warm,pass,ok,0449fa8,162207a,727fc42,9213121-dirty,9213121,gitlab,alvaro,regular-giraffe,254,
 2026-10-29T10:42:59Z,warm,pass,ok,f7fb495,162207a,727fc42,9ff4e2e,9ff4e2e,gitlab,alvaro,select-chigger,253,
+2026-11-02T10:44:39Z,warm,fail,ok,dc71be4,162207a,727fc42,e62feb0,e62feb0,gitlab,alvaro,hot-pika,131,"run error, expected completed: session_runner > Exit Workflow with Error (error, 0s)"
+2026-11-02T10:53:34Z,warm,pass,ok,c62b13d,162207a,727fc42,01ce1ed,01ce1ed,gitlab,alvaro,funny-lion,318,

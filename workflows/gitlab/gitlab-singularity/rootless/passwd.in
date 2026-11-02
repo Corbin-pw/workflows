@@ -1,0 +1,10 @@
+git:x:@UID@:@GID@::/var/opt/gitlab:/bin/sh
+root:x:@UID@:@GID@:root:/root:/bin/bash
+gitlab-www:x:@UID@:@GID@::/var/opt/gitlab/nginx:/bin/false
+gitlab-redis:x:@UID@:@GID@::/var/opt/gitlab/redis:/bin/false
+gitlab-psql:x:@UID@:@GID@::/var/opt/gitlab/postgresql:/bin/sh
+registry:x:@UID@:@GID@::/var/opt/gitlab/registry:/bin/sh
+gitlab-prometheus:x:@UID@:@GID@::/var/opt/gitlab/prometheus:/bin/sh
+gitlab-consul:x:@UID@:@GID@::/var/opt/gitlab/consul:/bin/sh
+gitlab-backup:x:@UID@:@GID@::/var/opt/gitlab/backups:/bin/sh
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin

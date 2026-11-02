@@ -2,24 +2,34 @@ Bootstrap: docker
 From: gitlab/gitlab-ee:19.5.1-ee.0
 
 # The official GitLab Linux package image (Enterprise Edition: the Free tier
-# without a license, Premium or Ultimate with one), unchanged. The start
-# template runs its entrypoint as an Apptainer instance with --fakeroot, whose
-# user namespace maps the image's service accounts, and binds the three
-# volumes (/etc/gitlab, /var/opt/gitlab, /var/log/gitlab) from the run
-# directory; the ports, the sshd configuration and the nginx snippet come from
-# the launcher, so a new GitLab version is a new From line and a new tag.
+# without a license, Premium or Ultimate with one), made to run as one
+# unprivileged user from a read-only image: no root, no user namespace with a
+# subuid range, no writable layer, so it runs wherever Apptainer or
+# Singularity runs at all, and its volumes can live on a network filesystem
+# (NFS, Lustre, GPFS), since nothing changes file ownership. The build step
+# is rootless/post.sh; the entrypoint is /assets/init-rootless; the Docker
+# entrypoint (/assets/init-container, as root) is left as it was.
+
+%files
+    rootless /assets/rootless
+
+%post
+    bash /assets/rootless/post.sh
 
 %labels
     org.opencontainers.image.source https://github.com/parallelworks/workflows
     activate.workflow gitlab
 
 %help
-    GitLab 19.5.1-ee for workflows/gitlab (gitlab-singularity). Started by the
-    workflow's launcher, not by hand:
-      apptainer instance start --fakeroot --writable-tmpfs --contain --cleanenv \
-          --bind <rundir>/config:/etc/gitlab --bind <rundir>/logs:/var/log/gitlab \
-          --bind <rundir>/data:/var/opt/gitlab --bind <rundir>/tmp:/tmp \
-          --bind <job>/run/activate:/etc/gitlab/activate:ro \
-          --bind <job>/run/sshd_config:/assets/sshd_config:ro gitlab.sif gitlab_<run>
-      apptainer exec --cleanenv instance://gitlab_<run> /assets/init-container
+    GitLab 19.5.1-ee for workflows/gitlab (gitlab-singularity), run as the
+    user. Started by the workflow's launcher, not by hand:
+      sed "s/@UID@/$(id -u)/g; s/@GID@/$(id -g)/g" /assets/rootless/passwd.in > passwd   (group.in -> group)
+      apptainer instance start --contain --cleanenv --uts --hostname <host> --workdir <rundir>/work \
+          --bind <rundir>/data:/var/opt/gitlab --bind <rundir>/config:/etc/gitlab \
+          --bind <rundir>/logs:/var/log/gitlab --bind passwd:/etc/passwd --bind group:/etc/group \
+          --bind <job>/run/activate:/etc/gitlab/activate:ro gitlab.sif gitlab_<run>
+      apptainer exec --cleanenv --pwd / instance://gitlab_<run> /assets/init-rootless
     with GITLAB_OMNIBUS_CONFIG in the environment (APPTAINERENV_GITLAB_OMNIBUS_CONFIG).
+    The passwd and group files name the running uid git (first) and every
+    account of the package, so the package's ownership checks pass and
+    PostgreSQL's peer authentication sees the git user.

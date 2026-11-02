@@ -11,12 +11,16 @@ set -o pipefail
 # Required Environment Variables:
 #   - service_parent_install_dir: where containers/gitlab-<tag>.sif lives, with
 #     a containers/gitlab.sif symlink the start template follows
-#   - service_rundir: must not be a run directory the Docker runtime wrote
+#   - service_rundir: must hold nothing another id owns (a run directory of
+#     the Docker runtime, or of the earlier fakeroot runtime)
 ################################################################################
 
 # The SIF is built from gitlab-singularity/gitlab.def (build-container.sh) and
-# pushed as ghcr.io/parallelworks/gitlab:<tag>, the file named after the tag
-GITLAB_SIF_TAG=19.5.1-ee
+# pushed as ghcr.io/parallelworks/gitlab:<tag>, the file named after the tag.
+# The -rootless tags are the single-user image (rootless/post.sh); the plain
+# 19.5.1-ee tag is the unchanged package image an earlier runtime ran with
+# fakeroot
+GITLAB_SIF_TAG=19.5.1-ee-rootless
 
 source "${PW_PARENT_JOB_DIR}/workflows/gitlab/lib/controller.sh"
 source tools/oras/libs.sh
@@ -42,11 +46,17 @@ if ! [ -f "${container_sif}" ]; then
 fi
 ln -sfn "${sif_name}" "${service_parent_install_dir}/containers/gitlab.sif"
 
-# Docker writes config/, data/ and logs/ as root; the user namespace this
-# runtime runs in cannot write them, so such a run directory is refused
-not_owned=$(find "${rundir}" -maxdepth 2 -user 0 -print -quit 2>/dev/null)
+# Everything this runtime writes is the user's own. Docker wrote config/,
+# data/ and logs/ as root, and the earlier fakeroot runtime with the ids of a
+# subuid range or inside an ext3 image (gitlab.img): neither can be read or
+# written here, so such a run directory is refused
+not_owned=$(find "${rundir}" -maxdepth 2 ! -user "$(id -u)" -print -quit 2>/dev/null)
 if [ -n "${not_owned}" ]; then
-    echo "::error title=Error::${not_owned} belongs to root: a run directory of the Docker runtime cannot be reused by the Singularity one. Choose another run directory"
+    echo "::error title=Error::${not_owned} belongs to another user id ($(stat -c %u "${not_owned}")): a run directory of the Docker runtime, or of the earlier fakeroot Singularity runtime, cannot be reused by this one. Choose another run directory"
+    exit 1
+fi
+if [ -s "${rundir}/gitlab.img" ]; then
+    echo "::error title=Error::${rundir}/gitlab.img is the state image of the earlier fakeroot runtime; this one keeps GitLab's state in config/, data/ and logs/ and cannot read the image. Remove it if it holds nothing you need (rm -f ${rundir}/gitlab.img; a run that failed before GitLab ever started left an empty one), or choose another run directory"
     exit 1
 fi
 

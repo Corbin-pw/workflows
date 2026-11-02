@@ -1,0 +1,24 @@
+#!/bin/bash
+# chpst of runit, minus the privilege drop when there is no privilege to drop.
+#
+# The Linux package's service scripts and command wrappers run every service
+# through "chpst -u <account>", which needs root (setgroups, setuid). In the
+# single-user image the container runs as one unprivileged account that
+# /etc/passwd calls git, gitlab-psql, gitlab-www, ... all at once, so the -u
+# option is dropped and the command runs as the caller. As root (the Docker
+# image's use) chpst behaves as before.
+real=/opt/gitlab/embedded/bin/chpst.real
+if [ "$(id -u)" -eq 0 ]; then
+    exec "${real}" "$@"
+fi
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -u) shift 2 ;;
+        -u*) shift ;;
+        -[Ube/nlLmdopfcrt]) args+=("$1" "$2"); shift 2 ;;
+        -*) args+=("$1"); shift ;;
+        *) break ;;
+    esac
+done
+exec "${real}" "${args[@]}" "$@"

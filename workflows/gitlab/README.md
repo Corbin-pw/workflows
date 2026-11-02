@@ -25,25 +25,21 @@ to the platform's probe); GitLab and its runners then run until the session is d
 
 | Run container using | What runs | Needs |
 |---|---|---|
-| **Singularity** (default) | The official image as a SIF (`ghcr.io/parallelworks/gitlab:19.5.1-ee`), run as an Apptainer instance started with `--fakeroot`: the package's own init runs its services as the image's accounts, mapped onto your subuid range, so nothing runs as root on the host and no Docker daemon is needed. A login node that cannot mount the SIF with a writable layer gets it extracted once into the run directory (`image/`, 4.7 GB) and runs that directory instead | `apptainer`/`singularity` with a subuid/subgid range for your user on the login node (`grep $USER /etc/subuid`; an administrator adds one with `apptainer config fakeroot --add <user>`), 1.8 GB for the SIF, and on a run directory whose filesystem refuses the container's ownership changes (NFS, Lustre, GPFS: the home of an HPC system) `fuse2fs` and `mkfs.ext3` (e2fsprogs), since GitLab's state then lives in an ext3 image there |
+| **Singularity** (default) | The official image rebuilt to run as **one unprivileged user** (`ghcr.io/parallelworks/gitlab:19.5.1-ee-rootless`, a SIF): an Apptainer or Singularity instance that needs no root, subuid range or writable layer, in which every service of the package (Puma, Sidekiq, Gitaly, PostgreSQL, Redis, nginx, GitLab's own SSH server) runs as you. A login node that cannot mount a SIF for an unprivileged user gets the image extracted once into `~/pw/software/containers/` and runs that directory | `apptainer`/`singularity` on the login node, 1.8 GB for the SIF |
 | **Docker** | The official all-in-one image `gitlab/gitlab-ee:19.5.1-ee.0`, as root | Docker on the login node, directly or through `sudo`, 5 GB for the image |
 
 Both need about 4 GB of RAM free for GitLab (8 GB recommended) and keep everything in the
 **Run directory**. A run directory belongs to one runtime: Docker writes its `config/`,
-`data/` and `logs/` as root, Singularity writes with the ids of your fakeroot range, and
-each runtime refuses the other's directory. Under Singularity the run's log says which of
-two layouts the run directory got: `config/`, `data/` and `logs/` as directories where its
-filesystem lets the container change file ownership (a local disk), or all of them inside
-`gitlab.img`, a sparse 20 GB ext3 image, where it does not (a network filesystem such as
-the home of an HPC system; `resize2fs gitlab.img <size>` grows it while GitLab is stopped,
-and the first start takes about twice as long). Hardened login nodes (a STIG image, FIPS
-mode, no FUSE mount of the SIF) are handled the same way, with notices in the run's log.
+`data/` and `logs/` as root, Singularity writes everything as you, and each runtime
+refuses the other's directory. Under Singularity nothing in the run directory belongs to
+another id, so it can live on any filesystem (a local disk, NFS, Lustre, GPFS: the home
+of an HPC system) and `rm -rf` removes it. Hardened login nodes (a STIG image, FIPS mode,
+no FUSE mount of the SIF) are handled with notices in the run's log.
 
 ## Requirements
 
 - GitLab runs on the cluster's **login node**, never in a scheduler job: the service
-  outlives the run, and the Singularity runtime needs that node's subuid range and
-  local disk. The CI jobs are what reach the compute nodes (the SLURM runner).
+  outlives the run. The CI jobs are what reach the compute nodes (the SLURM runner).
 - One of the two runtimes above on the login node.
 - A platform with session subdomains (GitLab serves at the root of its address).
 - For the SLURM runner: `sbatch`, `squeue`, `scancel` and `sacct` on the service host, and
@@ -194,7 +190,7 @@ need no license.
 |---|---|---|
 | Run container using | Singularity | See above |
 | Subdomain | `gitlab-<username>` | Decides the address, the clone URLs and the OIDC redirect URI. Reserve it with `pw subdomains reserve <label>` |
-| Run directory | `${HOME}/gitlab` | `config/`, `data/`, `logs/` (written by the container; inside `gitlab.img` on a network filesystem), `runner/` (yours), the generated secrets and, under Singularity, `work/` (the container's `/tmp`) and, where the SIF cannot be mounted, `image/` (the extracted image). One GitLab at a time, one runtime per directory |
+| Run directory | `${HOME}/gitlab` | `config/`, `data/`, `logs/` (written by the container; under Singularity `data/.rootless/` also holds what the package writes into its install directory), `runner/` (yours), the generated secrets and, under Singularity, `work/` (the container's `/tmp`). One GitLab at a time, one runtime per directory |
 | GitLab image | `gitlab/gitlab-ee:19.5.1-ee.0` | Docker only. Change the tag one minor version at a time on an existing run directory (GitLab's upgrade path) |
 | Root password | empty | Applied on the first start only; empty generates one into `<run directory>/.root_password` |
 | SSH port | `2222` | Loopback port of GitLab's SSH on the service host, shown in GitLab's SSH clone URLs |
@@ -211,30 +207,25 @@ Deleting the session (the platform's sessions page, or `pw endpoints delete <nam
 stops GitLab and the runners through the start script's cleanup: under Singularity a
 `gitlab-ctl stop` inside the instance and then the instance itself (`apptainer instance
 list` shows none left), under Docker a `docker rm -f`; the runner's session is killed
-either way. The run directory keeps everything. What the container wrote belongs to its
-accounts, so removing it is `sudo rm -rf` for a Docker directory and, for a Singularity
-one, a fakeroot shell of your own (the temporary directory keeps the extraction a host
-without FUSE falls back to off a `noexec` `/tmp`):
-
-```bash
-mkdir -p ~/tmp
-APPTAINER_TMPDIR=~/tmp SINGULARITY_TMPDIR=~/tmp apptainer exec --fakeroot -B "$HOME/gitlab" \
-    ~/pw/software/containers/gitlab.sif rm -rf "$HOME/gitlab"/{config,data,logs,image,work}
-rm -f "$HOME/gitlab/gitlab.img"      # the state image of a network-filesystem run directory is a plain file of yours
-```
-
-A new image version (a new `GITLAB_SIF_TAG`) replaces `image/` on the next start by
-itself; GitLab then migrates the data. A CI job that is running in SLURM at teardown
-finishes on its own (its runner is gone, so nothing collects its result); `scancel` it if
-it should not.
+either way. The run directory keeps everything. Under Singularity it is all yours (`rm -rf`); what
+the Docker container wrote belongs to root (`sudo rm -rf`). A CI job that is running in
+SLURM at teardown finishes on its own (its runner is gone, so nothing collects its
+result); `scancel` it if it should not.
 
 ## Building the Singularity image
 
 ```bash
 cd workflows/gitlab/gitlab-singularity
-./build-container.sh        # the official gitlab/gitlab-ee image, nothing added (gitlab.def)
-tools/oras/oras push ghcr.io/parallelworks/gitlab:19.5.1-ee gitlab-19.5.1-ee.sif
+./build-container.sh        # the official gitlab/gitlab-ee image plus rootless/ (gitlab.def)
+tools/oras/oras push ghcr.io/parallelworks/gitlab:19.5.1-ee-rootless gitlab-19.5.1-ee-rootless.sif
 ```
 
-New GitLab version: a new `From:` line in `gitlab.def`, a new `GITLAB_SIF_TAG` in
-`controller.sh`, a new tag on the registry. Keep the package public.
+`rootless/` makes the package run as one unprivileged user from a read-only image:
+`post.sh` (the build step) patches the few places that insist on root, replaces the
+image's OpenSSH with GitLab's own `gitlab-sshd` and turns every path the package writes
+under `/opt/gitlab` into a symlink into `data/.rootless/`; `init-rootless` is the
+entrypoint; `passwd.in` and `group.in` are the account files the launcher binds, naming
+the running uid `git` and every other account of the package. New GitLab version: a new
+`From:` line in `gitlab.def`, a new `GITLAB_SIF_TAG` in `controller.sh`, a new tag on
+the registry; `post.sh` fails the build when the package moved what it patches. Keep
+the package public.

@@ -103,10 +103,8 @@ pw_endpoints_args="${pw_endpoints_args} --subdomain ${service_subdomain}"
 # start of a run directory; it is kept beside the data so a later run can
 # tell the user where it is
 root_password_file="${service_rundir}/.root_password"
-# The database is in data/ or, under Singularity on a network filesystem,
-# inside the gitlab.img state image
 has_database() {
-    [ -d "${service_rundir}/data/postgresql/data" ] || [ -s "${service_rundir}/gitlab.img" ]
+    [ -d "${service_rundir}/data/postgresql/data" ]
 }
 if [ -s "${service_root_password_file}" ]; then
     if has_database; then

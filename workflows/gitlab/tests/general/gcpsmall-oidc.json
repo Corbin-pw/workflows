@@ -3,7 +3,7 @@
     "timeout_s": 3000,
     "warm_marker": "${HOME}/gitlab-demo/data/postgresql/data",
     "leftover_patterns": [
-      "assets/init-container",
+      "assets/init-rootless",
       "runsvdir -P /opt/gitlab/service",
       "gitlab-runner run",
       "pw endpoints run"

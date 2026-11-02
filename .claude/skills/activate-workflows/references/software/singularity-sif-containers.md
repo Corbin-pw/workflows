@@ -189,7 +189,10 @@ GitLab specifics (ports, configuration, stop command) are in [gitlab.md](gitlab.
   network filesystem (NFS, Lustre, GPFS: the home of most HPC systems) refuses the mapped
   id's chown, since its server sees the user's own id, and a `stat -f` type check misses
   half of them. Works: bind the state directories. Fails: one ext3 **overlay image**
-  (`overlay create --sparse --size <MiB> <rundir>/x.img`, `instance start --overlay` in
+  (`overlay create --fakeroot --sparse --size <MiB> <rundir>/x.img`: Apptainer 1.3
+  refuses an `upper/` the user owns under `--fakeroot` and records no whiteout in the
+  image, so a deleted file stays; probe a delete and send such runtimes to a local
+  disk; `instance start --overlay` in
   place of `--writable-tmpfs` and the binds; fuse2fs below fuse-overlayfs, the kernel
   checks permissions; needs `fuse2fs` and `mkfs.ext3` of e2fsprogs) with the init's
   service directory bound from the host (through the overlay `runsvdir` never saw the
@@ -216,6 +219,48 @@ GitLab specifics (ports, configuration, stop command) are in [gitlab.md](gitlab.
   directory is removed from a `--fakeroot` exec; a leftover check counts processes whose
   mount namespace still binds the run directory (`grep -l <rundir> /proc/[0-9]*/mountinfo`),
   since `ps -u $USER` misses them.
+
+## An image that needs root, rebuilt to run as the user (verified 2026-11, `workflows/gitlab/gitlab-singularity`)
+
+The `--fakeroot` instance above needs a subuid range, a writable layer and a filesystem
+that takes the namespace's `chown`, which NFS, Lustre and GPFS refuse. The sturdier
+option is a **single-user image**: the official image rebuilt so that every service runs
+as the one account the container runs as, from a **read-only** image. Nothing is chowned,
+no range or writable layer is needed, the run directory is the user's own on any
+filesystem, and it runs wherever an unprivileged container runs at all (the SIF, or the
+directory it was extracted into). The recipe (`gitlab.def`, `rootless/`):
+
+- **Accounts.** Bind a generated `/etc/passwd` and `/etc/group` that map the running
+  uid/gid to every account the package uses: the one the services should be named after
+  first (`getpwuid` returns the first match), `root` among the rest, so a resource that
+  insists on `owner 'root'` finds the file already owned as it wants.
+- **Privilege drops.** `chpst -u`, `su` and `setuidgid` fail without root even for the
+  current user: a wrapper in the binary's place drops the `-u` option when not root. A
+  same-uid switch in library code (Mixlib::ShellOut `user:`) is allowed and needs nothing.
+- **Writes outside the volumes.** Every path the package writes under its install
+  directory becomes a symlink baked into the image, pointing into the data volume and
+  seeded on first start from a copy kept in the image. Links the configuration run
+  creates inside read-only trees are created at build time; ones it would delete stay
+  (a dangling link is harmless where the reader checks `File.exist?`, fatal among Rails
+  initializers, where a small file that loads the target if it exists takes its place).
+- **Root checks.** Patched out at build time by a script that names the exact text it
+  replaces and fails the build when a new version moved it.
+- **Bind destinations** exist in the image (`mkdir -p` at build time): a runtime
+  without overlay or underlay creates none.
+- **Finding the writes.** Run once in a writable sandbox you own (`apptainer build
+  --sandbox` without fakeroot makes every file yours), `touch marker` before,
+  `find <sandbox> -newer marker -not -path '<sandbox>/var/*'` after; then run the
+  read-only image and fix what it still trips over, one resource per iteration.
+- **Entrypoint.** The image's init without its root-only parts (chown, host keys,
+  sysctl): seed the redirected directories, clean stale pids and sockets, start the
+  supervisor with a clean environment, run the configuration, wait; `TERM` runs the
+  package's stop command. A service the package only runs as root (OpenSSH) gives way
+  to its unprivileged equivalent (gitlab-sshd).
+
+Verified: every service as the user's uid, API, project creation, HTTP push and SSH
+clone, no file in the run directory owned by another id; also from an extracted image
+on an NFS home of a compute node without a subuid range, where a cold start took over
+12 minutes against about 5 on a login node's local disk (size the wait budget for it).
 
 ## Gotchas (def-file builds — verified, rag-service 2026-08)
 

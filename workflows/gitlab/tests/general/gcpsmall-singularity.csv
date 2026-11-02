@@ -4,3 +4,4 @@ date,phase,result,cleanup,workflow_tree,submitter_tree,tools_tree,commit,fetched
 2026-10-29T10:37:57Z,warm,pass,ok,f7fb495,162207a,727fc42,9ff4e2e,9ff4e2e,gitlab,alvaro,touching-emu,256,
 2026-10-29T12:02:33Z,warm,pass,ok,55050c0,162207a,727fc42,8e37626,8e37626,gitlab,alvaro,robust-snake,256,
 2026-10-29T14:26:43Z,warm,pass,ok,a5f7814,162207a,727fc42,c5d6299,c5d6299,gitlab,alvaro,settling-rat,255,
+2026-11-02T10:36:09Z,cold,pass,ok,a286917,162207a,727fc42,92933aa,92933aa,gitlab,alvaro,nice-airedale,454,
