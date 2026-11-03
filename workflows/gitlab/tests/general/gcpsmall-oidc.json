@@ -12,8 +12,7 @@
       "instances": "grep -l $HOME/gitlab-demo/data /proc/[0-9]*/mountinfo 2>/dev/null | wc -l"
     },
     "secrets": {
-      "oidc.client_secret": "GITLAB_TEST_OIDC_CLIENT_SECRET",
-      "runners.api_key": "GITLAB_TEST_PW_API_KEY"
+      "oidc.client_secret": "GITLAB_TEST_OIDC_CLIENT_SECRET"
     }
   },
   "resource": "pw://alvaro/gcpsmall",

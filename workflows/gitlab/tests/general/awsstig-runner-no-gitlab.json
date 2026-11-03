@@ -1,0 +1,23 @@
+{
+  "_test": {
+    "expect": "error",
+    "timeout_s": 900,
+    "leftover_patterns": [
+      "gitlab-runner run",
+      "runner-service.py",
+      "pw endpoints run"
+    ],
+    "secrets": {
+      "runners.token": "GITLAB_TEST_RUNNER_TOKEN"
+    }
+  },
+  "resource": "pw://alvaro/awsstig",
+  "mode": "runner",
+  "runners": {
+    "gitlab_url": "https://gitlab-nobody-started-this.activate.pw",
+    "path": "alvaro-ci",
+    "rundir": "${HOME}/gitlab-runner-none",
+    "shell": true,
+    "slurm": false
+  }
+}

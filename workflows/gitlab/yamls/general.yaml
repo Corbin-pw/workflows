@@ -1,12 +1,6 @@
 # yaml-language-server: $schema=https://activate.parallel.works/workflow.schema.json
 permissions:
   - '*'
-# The run's own PW_API_KEY stops working when the run completes, so pipelines
-# that call pw run on a credential that outlives it: the key given here (the
-# env block carries it into the start script, which hands it to the runner),
-# or the host's own pw sign-in on the clusters the ACTIVATE agent connects
-env:
-  GITLAB_PW_API_KEY: ${{ inputs.runners.api_key }}
 
 jobs:
   preprocessing:
@@ -19,8 +13,9 @@ jobs:
           repo: https://github.com/parallelworks/workflows.git
           branch: canary
           sparse_checkout:
-            - workflows/gitlab/${{ inputs.service.container_runtime }}
             - workflows/gitlab/lib
+            - workflows/gitlab/gitlab-singularity
+            - workflows/gitlab/gitlab-docker
             - tools/oras
       - name: Create Inputs
         run: |
@@ -40,7 +35,10 @@ jobs:
           cat <<'EOF' > license.gitlab-license
           ${{ inputs.service.license }}
           EOF
-          for f in root-password.txt oidc-client-secret.txt license.gitlab-license; do
+          cat <<'EOF' > runner-token.txt
+          ${{ inputs.runners.token }}
+          EOF
+          for f in root-password.txt oidc-client-secret.txt license.gitlab-license runner-token.txt; do
             tr -d '\r' < "$f" | sed '/^[[:space:]]*$/d; /^undefined$/d' > "$f.tmp"
             mv "$f.tmp" "$f"
           done
@@ -48,6 +46,7 @@ jobs:
           # Write input form variables and ensure the pw agent is in the PATH
           cat <<'EOF' >> inputs.sh
           PATH=$HOME/pw:$PATH
+          mode="${{ inputs.mode }}"
           service_rundir="${{ inputs.service.rundir }}"
           service_parent_install_dir="${{ inputs.service.parent_install_dir }}"
           service_subdomain="${{ inputs.service.subdomain }}"
@@ -57,11 +56,15 @@ jobs:
           service_license_file="${PW_PARENT_JOB_DIR}/license.gitlab-license"
           runners_shell="${{ inputs.runners.shell }}"
           runners_slurm="${{ inputs.runners.slurm }}"
+          runners_group="${{ inputs.runners.group }}"
+          runners_gitlab_url="${{ inputs.runners.gitlab_url }}"
+          runners_path="${{ inputs.runners.path }}"
+          runners_rundir="${{ inputs.runners.rundir }}"
+          runners_token_file="${PW_PARENT_JOB_DIR}/runner-token.txt"
           oidc_client_id="${{ inputs.oidc.client_id }}"
           oidc_client_secret_file="${PW_PARENT_JOB_DIR}/oidc-client-secret.txt"
           oidc_block_new_users="${{ inputs.oidc.block_new_users }}"
           oidc_display_name="${{ inputs.oidc.display_name }}"
-          pw_endpoints_args="--name ${{ inputs.service.name }}-${PW_RUN_SLUG}"
           EOF
           # Remove empty and undefined variables
           sed -i '/=\s*$\|=undefined\s*$/d' inputs.sh
@@ -69,39 +72,9 @@ jobs:
           # Add export to all lines
           sed -i 's/^/export /' inputs.sh
       - name: Controller Preprocessing
-        run: |
-          set -x
-          # This script prepares the target host and always runs in the controller node
-          cp inputs.sh controller-${PW_JOB_ID}.sh
-          cat workflows/gitlab/${{ inputs.service.container_runtime }}/controller.sh >> controller-${PW_JOB_ID}.sh
-          bash controller-${PW_JOB_ID}.sh
+        run: mode="${{ inputs.mode }}" container_runtime="${{ inputs.service.container_runtime }}" bash workflows/gitlab/lib/preprocess.sh controller
       - name: Create Service Script
-        run: |
-          rm -f HOSTNAME SESSION_PORT job.ended job.started
-          # This script starts the service
-          cp inputs.sh start-service-${PW_JOB_ID}.sh
-
-          # Write code common to all services
-          cat <<'EOF' >> start-service-${PW_JOB_ID}.sh
-
-          cleanup() {
-              trap - EXIT INT TERM HUP QUIT USR1 USR2 PIPE
-              echo "::notice::Cleaning up..."
-              if [ -f cancel.sh ]; then
-                  mv cancel.sh cancel.sh.submitted
-                  echo "echo Cleanup script was already executed" > cancel.sh
-                  bash cancel.sh.submitted
-              fi
-              kill -- -$$
-          }
-
-          trap cleanup EXIT INT TERM HUP QUIT USR1 USR2 PIPE
-
-          echo "::notice::Starting service"
-          EOF
-          cat workflows/gitlab/${{ inputs.service.container_runtime }}/start-template.sh >> ./start-service-${PW_JOB_ID}.sh
-          echo "SCRIPT_PATH=${PWD}/start-service-${PW_JOB_ID}.sh" | tee -a $OUTPUTS
-          echo "SKIP_CLEANUP_PATH=${PWD}/SKIP_CLEANUP" | tee -a $OUTPUTS
+        run: mode="${{ inputs.mode }}" container_runtime="${{ inputs.service.container_runtime }}" service_name="${{ inputs.service.name }}" bash workflows/gitlab/lib/preprocess.sh service-script
 
   session_runner:
     needs:
@@ -120,8 +93,8 @@ jobs:
           script_path: ${{ needs.preprocessing.outputs.SCRIPT_PATH }}
           define_cleanup_script: true
           cleanup_script_path: ./cancel.sh
-          # GitLab always runs where preprocessing did: a service that outlives the
-          # run cannot live in a scheduler allocation
+          # GitLab and the runners always run where preprocessing did: a service
+          # that outlives the run cannot live in a scheduler allocation
           scheduler: false
           use_scheduler_agent: false
           submit_and_exit: false
@@ -151,10 +124,10 @@ jobs:
         uses: github/parallelworks/workflows@canary
         with:
           $yaml: workflows/wait_for_endpoint/general.yaml
-          endpoint_name: ${{ inputs.service.name }}-${PW_RUN_SLUG}
+          endpoint_name: ${{ needs.preprocessing.outputs.ENDPOINT_NAME }}
           host: ${{ inputs.resource.ip }}
           skip_cleanups_file: ${{ needs.preprocessing.outputs.SKIP_CLEANUP_PATH }}
-          path: /users/sign_in
+          path: ${{ needs.preprocessing.outputs.HEALTH_PATH }}
           healthy: '2*'
           budget: 1800
       - name: Cancel Script Submitter
@@ -169,12 +142,26 @@ jobs:
       resource:
         type: compute-clusters
         label: Service host
-        description: GitLab and its CI runners run on this cluster's login node.
+        description: GitLab, or the runners you add to one, run on this cluster's login node.
         include-workspace: false
+      mode:
+        type: dropdown
+        label: What to start
+        description: Start GitLab serves a GitLab of your own with runners for your projects; Add my runners registers runners of yours with a GitLab another user started on this cluster, so that your pipelines run as you.
+        default: gitlab
+        options:
+          - label: Start GitLab
+            value: gitlab
+          - label: Add my runners to a running GitLab
+            value: runner
+        tooltip: |
+          A GitLab started here runs CI jobs as the user who launched it, so its runners only serve the group that user owns. Every other user who signs in to that GitLab (with ACTIVATE) and wants pipelines launches this workflow on the same cluster with "Add my runners": the runners then run their projects' jobs as them, with their own cluster account and credentials, from their own runner directory.
       service:
         type: group
         label: GitLab settings
         collapsed: true
+        hidden: ${{ inputs.mode == 'runner' }}
+        ignore: ${{ .hidden }}
         items:
           name:
             type: string
@@ -244,37 +231,73 @@ jobs:
       runners:
         type: group
         label: CI/CD runners
-        description: Runners registered with this GitLab that run pipelines on the service host as your user; the runners' configuration lives in the run directory and is reused.
+        description: Runners of yours on the service host; every job they take runs as you, with your cluster account, so only your projects can use them.
         collapsed: true
         items:
+          gitlab_url:
+            label: GitLab address
+            description: The https://... address of the GitLab in your browser, started on this cluster with this workflow and shared with you.
+            type: string
+            hidden: ${{ inputs.mode != 'runner' }}
+            ignore: ${{ .hidden }}
+            tooltip: |
+              The GitLab's session must be shared with you (its owner shares it from the platform's sessions page) and its run must have completed. The runners reach the GitLab on the login node's loopback port, which the workflow asks the GitLab for through this address; they cannot work from another cluster.
+          token:
+            label: GitLab personal access token
+            description: A token of your GitLab account with the api and create_runner scopes, used to register the runners; give it a short expiry, since the platform keeps form values in the run's record. A later start of the same runner directory needs none.
+            type: password
+            optional: true
+            hidden: ${{ inputs.mode != 'runner' }}
+            ignore: ${{ .hidden }}
+            tooltip: |
+              In GitLab, your avatar -> Edit profile -> Access tokens -> Add new token: a Legacy token (not a fine-grained one), scopes api and create_runner, an expiry of a day; GitLab shows it once. The token looks the project or group up and creates the runners; the runners' own tokens stay in the runner directory, and a runner whose stored token no longer works is registered again with a new token given here.
+          path:
+            label: Project or group
+            description: Full path of the GitLab project, namespace included (jane/hpc-pipeline, not hpc-pipeline), or of the group (team-a), whose pipelines run on these runners; you must be a Maintainer of the project or an Owner of the group.
+            type: string
+            hidden: ${{ inputs.mode != 'runner' }}
+            ignore: ${{ .hidden }}
+            tooltip: |
+              The path is everything after the GitLab address in your browser with the project or group open: <username or group>/<project> for a project, <group> for a group. A project name on its own is not found. The runners are registered as runners of that project or group only (project or group runners), so no other project can run a job as you; share the project with care, since a commit anyone pushes to it runs as you.
+          rundir:
+            label: Runner directory
+            description: Keeps the runners' registration, configuration, checkouts and cache; reuse it to keep them, delete it to register anew.
+            type: string
+            default: ${HOME}/gitlab-runner
+            hidden: ${{ inputs.mode != 'runner' }}
+            ignore: ${{ .hidden }}
+            tooltip: |
+              Holds tokens/ (the runners' authentication tokens), config.toml, builds/ and cache/ (the jobs' checkouts), runner.log and, for the SLURM runner, jacamar/ and jacamar.toml; all readable by you alone. One set of runners per directory at a time; runners for two GitLabs or two projects take two directories.
+          group:
+            label: Group of the runners
+            description: GitLab group whose projects run their pipelines on these runners, created on the first start with you as its Owner; empty names it <your username>-ci.
+            type: string
+            optional: true
+            hidden: ${{ inputs.mode == 'runner' }}
+            ignore: ${{ .hidden }}
+            tooltip: |
+              The runners are group runners: a project outside the group cannot use them, so a user you share the GitLab with cannot run a job as you. Create your projects in the group, or move them there (the project's Settings -> General -> Advanced -> Transfer project). A group of this path that exists already is used as is. With Sign in with ACTIVATE configured, your GitLab account is created ahead of your first sign-in and made the group's Owner; without it, root owns the group.
           shell:
             type: boolean
             default: true
             label: Register a shell runner
-            description: Runs CI jobs directly on the service host (shell executor); it takes untagged jobs.
+            description: Runs CI jobs directly on the service host (shell executor) as you; it takes untagged jobs.
           slurm:
             type: boolean
             default: false
             label: Register a SLURM runner
-            description: Submits each CI job to the cluster's scheduler with Jacamar CI; jobs select it with the tag slurm and pass sbatch options in the SCHEDULER_PARAMETERS variable.
+            description: Submits each CI job to the cluster's scheduler as you with Jacamar CI; jobs select it with the tag slurm and pass sbatch options in the SCHEDULER_PARAMETERS variable.
             hidden: ${{ inputs.resource.schedulerType != 'slurm' }}
             ignore: ${{ .hidden }}
             tooltip: |
-              The runner uses GitLab's custom executor with Jacamar CI (ECP): the job's before_script and script run inside an sbatch job submitted as your user from the service host, after_script on the service host. A job sets SCHEDULER_PARAMETERS to the sbatch options it needs, for example "--nodes=1 --time=00:10:00" plus the account, partition or QoS the cluster requires; -o, -e, -J and --wait are reserved by Jacamar. Jobs wait for the allocation inside GitLab's job timeout.
-          api_key:
-            type: password
-            label: ACTIVATE API key
-            description: Lets pipelines run pw as you after this run completes; without it, jobs on a cloud cluster cannot call pw.
-            optional: true
-            tooltip: |
-              A platform API key of yours (account settings, API keys). Jobs of the shell runner get it as PW_API_KEY, so a pipeline can run pw ssh, pw workflows run or any pw command on your other resources; the run's own credential stops working when the run completes. On a cluster connected through the ACTIVATE agent (existing or managed) the field is not shown: the agent keeps the login node signed in as you, and jobs use that sign-in. Launch again with a new key before this one expires; a project can also set PW_API_KEY as a CI/CD variable of its own.
-            hidden: ${{ inputs.resource.provider == 'existing' || inputs.resource.provider == 'managed-cluster' || inputs.resource.name == 'user-workspace' }}
-            ignore: ${{ .hidden }}
+              The runner uses GitLab's custom executor with Jacamar CI (ECP): the job's before_script and script run inside an sbatch job submitted as you from the service host, after_script on the service host. A job sets SCHEDULER_PARAMETERS to the sbatch options it needs, for example "--nodes=1 --time=00:10:00" plus the account, partition or QoS the cluster requires; -o, -e, -J and --wait are reserved by Jacamar. Jobs wait for the allocation inside GitLab's job timeout.
       oidc:
         type: group
         label: Sign in with ACTIVATE
         description: Lets users sign in to GitLab with their ACTIVATE account; a client ID reveals the secret and the approval fields. Leave it empty for GitLab's own accounts only.
         collapsed: true
+        hidden: ${{ inputs.mode == 'runner' }}
+        ignore: ${{ .hidden }}
         items:
           client_id:
             label: Client ID

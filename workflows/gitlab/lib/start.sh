@@ -3,9 +3,9 @@
 #
 # Purpose: What every runtime's start script does before its container starts:
 #          defaults, the runner tools, the first half of cancel.sh (the CI
-#          runner), the pinned subdomain, the root password, the exports the
-#          launcher reads, and finish_endpoint_run for the status that
-#          pw endpoints run returns
+#          runner, lib/runners.sh), the pinned subdomain, the root password,
+#          the exports the launcher reads, and finish_endpoint_run for the
+#          status that pw endpoints run returns
 # Runs on: Controller node
 # Called by: workflows/gitlab/<runtime>/start-template.sh (sourced)
 #
@@ -16,10 +16,10 @@
 #   - service_ssh_port: loopback port of GitLab's SSH
 #   - service_root_password_file: optional; the root password for a first start
 #   - runners_shell, runners_slurm: which CI runners to start
+#   - runners_group: optional; the path of the group that owns the runners
 #   - service_parent_install_dir: holds gitlab-runner/current and
 #     jacamar-ci/current, installed by controller.sh when needed
 #   - oidc_client_id, oidc_display_name: optional ACTIVATE OIDC client
-#   - GITLAB_PW_API_KEY: optional; the API key pipelines run pw with (env block)
 ################################################################################
 
 if [ -z "${service_rundir}" ]; then
@@ -36,8 +36,10 @@ if [ -z "${service_parent_install_dir}" ]; then
     service_parent_install_dir=${HOME}/pw/software
 fi
 gitlab_lib="${PW_PARENT_JOB_DIR}/workflows/gitlab/lib"
-gitlab_runner_bin="${service_parent_install_dir}/gitlab-runner/current/gitlab-runner"
-jacamar_bin="${service_parent_install_dir}/jacamar-ci/current/jacamar"
+source "${gitlab_lib}/runners.sh"
+runner_root="${service_rundir}/runner"
+gitlab_runner_bin=$(runners_find_tool gitlab-runner gitlab-runner)
+jacamar_bin=$(runners_find_tool jacamar-ci jacamar)
 if [ "${runners_shell}" = "true" ] || [ "${runners_slurm}" = "true" ]; then
     if ! [ -x "${gitlab_runner_bin}" ]; then
         echo "::error title=Error::gitlab-runner is not installed at ${gitlab_runner_bin} (the controller installs it)"
@@ -48,7 +50,10 @@ if [ "${runners_slurm}" = "true" ] && ! [ -x "${jacamar_bin}" ]; then
     echo "::error title=Error::Jacamar CI is not installed at ${jacamar_bin} (the controller installs it)"
     exit 1
 fi
-mkdir -p "${service_rundir}/config" "${service_rundir}/data" "${service_rundir}/logs" "${service_rundir}/runner"
+mkdir -p "${service_rundir}/config" "${service_rundir}/data" "${service_rundir}/logs" "${runner_root}"
+# Repositories, database, secrets and the runners' checkouts are the user's
+# alone, whatever the umask of the login node
+chmod 700 "${service_rundir}"
 
 for tool in openssl curl flock python3; do
     if ! command -v ${tool} >/dev/null 2>&1; then
@@ -65,20 +70,8 @@ mkdir -p "${run_dir}"
 # Neither the container nor the runner (started in a session of its own) is in
 # the endpoint's process tree, so teardown needs cancel.sh (run by the cleanup
 # trap) to stop them: the runner here, the container appended by the runtime
-cat > cancel.sh <<CANCELEOF
-#!/bin/bash
-if [ -s "${run_dir}/runner.pid" ]; then
-    pid=\$(cat "${run_dir}/runner.pid")
-    pkill -TERM -s "\${pid}" 2>/dev/null
-    for i in \$(seq 1 20); do
-        pgrep -s "\${pid}" >/dev/null 2>&1 || break
-        sleep 1
-    done
-    pkill -KILL -s "\${pid}" 2>/dev/null
-fi
-rm -f "${run_dir}/gitlab.env"
-CANCELEOF
-chmod +x cancel.sh
+runners_write_cancel_sh
+echo "rm -f \"${run_dir}/gitlab.env\"" >> cancel.sh
 
 # GitLab builds its clone URLs and the OIDC redirect URI from its address, so
 # the subdomain is pinned instead of taking a random one
@@ -131,32 +124,6 @@ if [ -n "${oidc_client_id}" ] && [ -z "${platform_host}" ]; then
     exit 1
 fi
 
-# Pipelines call pw as the user after this run completes, when the run's own
-# PW_API_KEY stops working: with the key given as input (the env block carries
-# it as GITLAB_PW_API_KEY) when there is one, else with the host's own pw
-# sign-in (the clusters the ACTIVATE agent connects have one, a cloud cluster
-# has none). Decided here, before anything starts, and never traced; the
-# launcher gives the runner the credential that works, and none when neither
-# does, so jobs then cannot call pw unless a project brings its own key
-set +x
-case "${GITLAB_PW_API_KEY}" in ''|undefined) GITLAB_PW_API_KEY="" ;; esac
-if [ -n "${GITLAB_PW_API_KEY}" ]; then
-    if ! PW_API_KEY="${GITLAB_PW_API_KEY}" pw auth whoami >/dev/null 2>&1; then
-        echo "::error title=Error::The ACTIVATE API key given does not authenticate on $(hostname)"
-        exit 1
-    fi
-    runner_pw_auth=key
-    echo "::notice::Pipelines run pw with the API key given, which outlives this run"
-elif env -u PW_API_KEY pw auth whoami >/dev/null 2>&1; then
-    runner_pw_auth=host
-    echo "::notice::Pipelines run pw with the pw sign-in of $(hostname), which outlives this run"
-else
-    runner_pw_auth=none
-    echo "::notice::Pipelines cannot run pw: $(hostname) has no pw sign-in of its own and the form carried no ACTIVATE API key (a project may still set PW_API_KEY as a CI/CD variable)"
-fi
-set -x
-export runner_pw_auth
-
 # A host in FIPS mode (fips=1 on its kernel command line: STIG images) shows
 # /proc/sys/crypto/fips_enabled = 1 to the container, whose OpenSSH then wants
 # a FIPS provider the image does not have and dies while the entrypoint
@@ -170,7 +137,7 @@ if [ "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null)" = "1" ]; then
     echo "::notice::$(hostname) runs in FIPS mode; the container reads fips_enabled=0 (the GitLab image is not a FIPS build)"
 fi
 
-export gitlab_lib service_rundir service_subdomain service_ssh_port platform_host oidc_display_name root_password_file gitlab_runner_bin jacamar_bin fips_enabled_file
+export gitlab_lib service_rundir service_subdomain service_ssh_port platform_host oidc_display_name root_password_file runner_root gitlab_runner_bin jacamar_bin fips_enabled_file runners_group
 
 finish_endpoint_run() {
     # finish_endpoint_run <status of pw endpoints run>

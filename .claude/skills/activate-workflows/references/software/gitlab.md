@@ -178,16 +178,56 @@ start and stop the container and define `gitlab_exec`, `gitlab_alive` and `gitla
   job's `SCHEDULER_PARAMETERS`, where the tutorial tells the reader to put them. An
   example project the workflow created was dropped the same day; the tutorial creates
   one by hand.
-- **Pipelines that call `pw` need a credential that outlives the run** (pw-auth.md): the
-  form takes an ACTIVATE API key on cloud clusters (hidden for `existing`,
-  `managed-cluster` and the workspace, the probe pattern), carried by the top-level
-  `env:` block as `GITLAB_PW_API_KEY`; `lib/start.sh` checks it with `PW_API_KEY=<key> pw
-  auth whoami` (a bad key fails the run), else the host's sign-in with `env -u PW_API_KEY
-  pw auth whoami`, else notes that pipelines cannot call pw; the launcher starts the
-  runner with `env PW_API_KEY=<key>` or `env -u PW_API_KEY`, outside the `set -x` trace.
-  The shell executor's jobs inherit the runner's environment (verified: PATH, PORT,
-  `PW_PLATFORM_HOST`); the runner used to inherit the run's key as well, which dies with
-  the run. Jacamar's stages do not inherit anything (next bullet).
+- **A runner runs every job as the Linux user it runs as**, whichever GitLab account
+  pushed, so a runner shared between users runs their jobs as its owner. The workflow
+  therefore registers no instance runner (2026-11-03; the first version did, with the
+  owner's `PW_API_KEY` handed to the runner through a form input and an `env:` block,
+  both gone): the owner's runners are **group runners** of a private group the owner
+  owns (`POST /user/runners` with `runner_type=group_type&group_id=N`; the group from
+  `POST /groups`, the owner's account created ahead of its first OIDC sign-in with
+  `POST /users ... provider=openid_connect&extern_uid=<PW_USER>` and made Owner with
+  `POST /groups/:id/members access_level=50`, 409 then `PUT`), and every other user adds
+  runners of their own from the same workflow's **runner mode** on the same login node
+  (`lib/runner-start-template.sh`): project or group runners of a path of theirs,
+  registered with their personal access token (`api` + `create_runner`; `GET
+  /projects/:path` then `GET /groups/:path` resolves the id), started as them from
+  their own directory. A stored runner is kept only while `POST /runners/verify`
+  answers 200 *and* `GET /runners/:id` shows the scope this run wants
+  (`runner_type`, `groups[].id` or `projects[].id`); otherwise it is deleted and
+  registered again, which is how an instance runner of the first version goes away.
+  The runner always starts with `env -u PW_API_KEY`: a pipeline that calls `pw` sets
+  `PW_API_KEY` as a masked CI/CD variable (pw-auth.md).
+  Verified 2026-11-03 on a STIG login node with one account: group runners
+  registered, a pipeline of a project in the group ran on the added runners (shell job
+  without a key in its environment, SLURM job through Jacamar on a compute node, every
+  connection through the forwarder), a later start without a token kept the stored
+  runners, a cancel mid-flight left nothing. Not verified without a second account: a
+  non-owner's run key reading `/-/activate/host` through a shared session, and the
+  owner-account pre-creation at a first OIDC sign-in (the tests carry no OIDC client).
+- **Finding another user's GitLab on the login node, safely** (verified 2026-11-03 on a
+  STIG login node): the runner must use the loopback port (the proxy strips
+  `Authorization`), which every user of the node shares, so (1) the GitLab's nginx
+  snippet answers `GET /-/activate/host` with `{"port", "uid", "host"}` behind the
+  platform's sign-in, and the runner-mode run reads it through the public address with
+  its own `PW_API_KEY` (the session must be shared with that user; the proxy's routing
+  of the subdomain is what vouches for the answer); (2) `/proc/net/tcp` is world-readable
+  and names the uid of every socket, so `lib/runner-service.py listener-uid <port>`
+  checks who holds the port before anything is sent, and (3) the runner, Jacamar and
+  git reach GitLab through a forwarder of the run (`runner-service.py forward`) that
+  opens each connection to the port and relays it only once the accepted socket at the
+  other end (`local = port, remote = our ephemeral port` in `/proc/net/tcp`) belongs to
+  that uid or to root (docker-proxy); a process that takes the port over after GitLab
+  stops is refused before a byte is sent (a stolen runner token would hand the thief
+  every job's variables). The status page (`runner-service.py status`, the endpoint)
+  shows the listener's state the same way. Python 3.6 is enough for it.
+- **`/proc/net/tcp` columns:** `sl local_address rem_address st ... uid ... inode`;
+  addresses are little-endian hex (`0100007F:1F90` is 127.0.0.1:8080), state `0A` is
+  LISTEN, `01` ESTABLISHED; a socket in the accept queue already shows the listener's uid.
+- **The runner tools in a shared install directory** (the HSP project directory): a
+  tool another user installed is used as is when executable, the installer runs
+  `chmod a+rX` on it (a hardened node's umask is 0027), and a user who can write
+  neither installs into `~/pw/software`; the start scripts look in both places
+  (`lib/runner-tools.sh`, `runners_find_tool`).
 - **Jacamar's host-side stages run as `env -i /bin/bash --login` scripts** (its docs, and
   verified 2026-10-29): the runner's environment never reaches them, and the artifact and
   cache stages look `gitlab-runner` up by name, so a runner binary outside the login

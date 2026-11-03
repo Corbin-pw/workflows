@@ -795,6 +795,17 @@
   `&&` list as a subshell, so the recorded pid is the subshell's and the session id to
   kill (`pkill -s`) is `cmd`'s own pid, one fork later. Background `setsid cmd &` on its
   own (then `setsid` needs no fork and `$!` is `cmd`, the session leader), `cd` before it.
+- **A token on curl's command line is readable by every user of the login node** (`ps`
+  shows the arguments of every process for the call's duration): pass it through a
+  mode-600 file of the job with `-H @<file>` (curl 7.55+; verified 2026-11-03 on a
+  STIG login node, `workflows/gitlab/lib/runners.sh`), and a secret request body with
+  `--data @<file>` or `--data-urlencode name@<file>`.
+- **A one-line `local` expands every word before it assigns any of them** (2026-11-03,
+  `workflows/gitlab/lib/runners.sh`): `local kind=$1 file="dir/${kind}.token"` names the
+  file `dir/.token`, because `${kind}` is expanded while `kind` is still unset (the
+  words of `local` are ordinary command arguments). Two runners then shared one token
+  file and the second was reported "already registered" as the first. Use `$1` in the
+  same line, or a second `local` line.
 - **bash 5.1 reads a bare `case` inside `$( )` as the keyword** and fails the whole script
   at parse time with `unexpected EOF while looking for matching` (gcptest, bash 5.1.8,
   2026-10-16: `echo "$(list_times case)"` broke a test driver; `case/log.x` as a path is

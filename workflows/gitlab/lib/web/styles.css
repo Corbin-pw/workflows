@@ -1,0 +1,84 @@
+/* The runner status page, in the platform's look. Colors come only from the --theme-*
+ * tokens in theme.css (the theme contract of @parallelworks/ui, vendored by
+ * tools/ui/sync-theme.sh) and the type from fonts.css. Each block mirrors a component
+ * of that package and names it: PageHeader, buttonClasses, Section (card),
+ * DescriptionList, Table, StatusBadge, Callout, EmptyState, code. */
+
+:root {
+  color-scheme: light dark;
+  --font-sans: "Geist Sans", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, Menlo, Consolas, monospace;
+  --layer-header: 20;
+  --radius-md: 0.375rem;
+  --radius-xl: 0.75rem;
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* base.css: page defaults */
+*, ::before, ::after { box-sizing: border-box; border-color: var(--theme-border); }
+html { font-family: var(--font-sans); font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+body { margin: 0; min-height: 100vh; background: var(--theme-app-bg); color: var(--theme-app); }
+a { color: var(--theme-link); }
+h1, h2, p, dl, dd, pre { margin: 0; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--theme-focus); outline-offset: 2px; }
+code, .mono { font-family: var(--font-mono); font-size: 0.8125rem; }
+.muted { color: var(--theme-muted-text-color); }
+.icon { width: 1em; height: 1em; flex: none; }
+
+/* PageHeader */
+.page-header { position: sticky; top: 0; z-index: var(--layer-header); display: flex; align-items: center; justify-content: space-between; gap: 1rem; height: 3rem; padding: 0 1rem; border-bottom: 1px solid var(--theme-border); background: var(--theme-app-bg); }
+.page-header-trail { display: flex; align-items: center; gap: 0.75rem; min-width: 0; font-size: 0.8125rem; }
+.page-mark { display: inline-flex; font-size: 1.25rem; color: var(--theme-accent); }
+.page-title { font-size: 1rem; font-weight: 500; white-space: nowrap; }
+.page-description { color: var(--theme-muted-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.page-actions { display: flex; gap: 0.25rem; }
+
+/* buttonClasses: ghost, md */
+.btn { display: inline-flex; align-items: center; gap: 0.375rem; height: 2rem; padding: 0 0.75rem; border: 1px solid transparent; border-radius: var(--radius-md); background: none; font-size: 0.875rem; font-weight: 500; white-space: nowrap; }
+.btn-ghost { color: var(--theme-muted-text-color); }
+.btn-ghost:hover { background: var(--theme-muted-panel-bg); color: var(--theme-app); }
+
+main { display: grid; gap: 1rem; padding: 1rem; max-width: 72rem; }
+
+/* Section variant="card" */
+.panel { border: 1px solid var(--theme-border); border-radius: var(--radius-xl); background: var(--theme-panel-bg); overflow: hidden; }
+.panel-header { padding: 0.75rem 1rem; border-bottom: 1px solid var(--theme-border); }
+.panel-title { font-size: 1rem; font-weight: 600; }
+.panel-description { margin-top: 0.25rem; font-size: 0.875rem; color: var(--theme-muted-text-color); }
+
+/* DescriptionList variant="divided" */
+.dl { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); column-gap: 1.5rem; padding: 0 1rem; font-size: 0.875rem; }
+.dl dt, .dl dd { padding: 0.5rem 0; border-bottom: 1px solid var(--theme-border); }
+.dl dt { color: var(--theme-muted-text-color); }
+.dl dd { min-width: 0; overflow-wrap: anywhere; }
+.dl dt:nth-last-of-type(1), .dl dd:last-of-type { border-bottom: 0; }
+@media (max-width: 40rem) { .dl { grid-template-columns: 1fr; } .dl dt { padding-bottom: 0; border-bottom: 0; } }
+
+/* Table, compact */
+.table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.table th { padding: 0.5rem 0.75rem; background: var(--theme-muted-panel-bg); font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; text-align: left; }
+.table td { padding: 0.375rem 0.75rem; border-top: 1px solid var(--theme-border); white-space: nowrap; }
+.table tbody tr:hover { background: var(--theme-panel-hover); }
+
+/* StatusBadge, sm */
+.badge { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.125rem 0.5rem; border: 1px solid; border-radius: 999px; font-size: 0.625rem; font-weight: 500; vertical-align: middle; }
+.badge-success { background: var(--theme-success-muted); color: var(--theme-success-text); border-color: color-mix(in srgb, var(--theme-success) 25%, transparent); }
+.badge-success .icon { color: var(--theme-success); }
+.badge-error { background: var(--theme-error-muted); color: var(--theme-error-text); border-color: color-mix(in srgb, var(--theme-error) 25%, transparent); }
+.badge-error .icon { color: var(--theme-error); }
+
+/* Callout */
+.callout { display: flex; gap: 0.75rem; padding: 0.75rem 1rem; border-radius: var(--radius-xl); font-size: 0.875rem; line-height: 1.25rem; }
+.callout .icon { font-size: 1.25rem; margin-top: 0.1rem; }
+.callout-error { background: var(--theme-error-muted); color: var(--theme-error-text); }
+.callout-error .icon { color: var(--theme-error); }
+.callout-warning { background: var(--theme-warning-muted); color: var(--theme-warning-text); }
+.callout-warning .icon { color: var(--theme-warning); }
+
+/* EmptyState, bare */
+.empty { padding: 1.5rem 0.75rem; font-size: 0.75rem; color: var(--theme-muted-text-color); text-align: center; }
+
+/* code block */
+.code { margin: 0; padding: 0.75rem 1rem; background: var(--theme-code-bg); color: var(--theme-code-text); font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto; }

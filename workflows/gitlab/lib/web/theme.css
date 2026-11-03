@@ -1,0 +1,113 @@
+/* The platform's theme contract: every color is one of these --theme-* tokens, generated
+ * by @parallelworks/ui (github.com/parallelworks/foundation, packages/ui) from the default
+ * theme's light and dark seeds. Each token pairs its modes with light-dark(), so it follows
+ * the color-scheme the page sets. Do not edit: tools/ui/sync-theme.sh rewrites this file.
+ * Source: @parallelworks/ui 0.68.0 (npm). */
+:root {
+  --theme-app-bg: light-dark(#f3f4f6, #111418);
+  --theme-panel-bg: light-dark(#fcfeff, #151c25);
+  --theme-panel-hover: light-dark(#f2f5f9, #1e262e);
+  --theme-muted-panel-bg: light-dark(#e7eaee, #1c242c);
+  --theme-hover: light-dark(#e3e5e9, #323a43);
+  --theme-input-bg: light-dark(#fafcfe, #182028);
+  --theme-input-disabled-bg: light-dark(#ebeef1, #131a22);
+  --theme-app: light-dark(#0a101b, #e9f1fa);
+  --theme-muted-text-color: light-dark(#4e5664, #c8d1d9);
+  --theme-placeholder: light-dark(#7e8796, #9da5ad);
+  --theme-link: light-dark(#06354f, #9dd7ff);
+  --theme-border: light-dark(#cacdd0, #30363d);
+  --theme-border-field: light-dark(#bdc0c3, #3a4148);
+  --theme-border-strong: light-dark(#848689, #676e76);
+  --theme-accent: light-dark(#06354f, #5b9ccf);
+  --theme-accent-text: light-dark(#ffffff, #000000);
+  --theme-accent-hover: light-dark(#002841, #6aace0);
+  --theme-accent-subtle: light-dark(#d3ebfc, #0f2638);
+  --theme-focus: light-dark(#06354f, #5b9ccf);
+  --theme-focus-ring: light-dark(rgba(6, 53, 79, 0.25), rgba(91, 156, 207, 0.35));
+  --theme-success: light-dark(#00973d, #00bf54);
+  --theme-success-text: light-dark(#006226, #6be88c);
+  --theme-success-solid: #00873c;
+  --theme-success-muted: light-dark(rgba(0, 151, 61, 0.1), rgba(0, 191, 84, 0.15));
+  --theme-error: light-dark(#ea4841, #ff6056);
+  --theme-error-text: light-dark(#a11a1b, #ffc1b8);
+  --theme-error-solid: #db3934;
+  --theme-error-muted: light-dark(rgba(234, 72, 65, 0.1), rgba(255, 96, 86, 0.15));
+  --theme-warning: light-dark(#bd7100, #dd8900);
+  --theme-warning-text: light-dark(#7b4a00, #ffc672);
+  --theme-warning-solid: #a76900;
+  --theme-warning-muted: light-dark(rgba(189, 113, 0, 0.1), rgba(221, 137, 0, 0.15));
+  --theme-info: light-dark(#0681f8, #499fff);
+  --theme-info-text: light-dark(#0050af, #abd4ff);
+  --theme-info-solid: light-dark(#0073e8, #0073e9);
+  --theme-info-muted: light-dark(rgba(6, 129, 248, 0.1), rgba(73, 159, 255, 0.15));
+  --theme-favorite: light-dark(#e7457a, #fe5c8e);
+  --theme-favorite-text: light-dark(#9e174b, #ffbecd);
+  --theme-favorite-solid: #d7366e;
+  --theme-favorite-muted: light-dark(rgba(231, 69, 122, 0.1), rgba(254, 92, 142, 0.15));
+  --theme-shadow-sm: 0 1px 2px light-dark(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.35));
+  --theme-shadow:
+    0 4px 6px -1px light-dark(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.35)),
+    0 2px 4px -2px light-dark(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.35));
+  --theme-shadow-lg:
+    0 10px 15px -3px light-dark(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.35)),
+    0 4px 6px -4px light-dark(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.35));
+  --theme-shadow-xl:
+    0 25px 80px -20px light-dark(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.6)),
+    0 10px 30px -10px light-dark(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.4));
+  --theme-code-bg: light-dark(#e7eaee, #1c242c);
+  --theme-code-text: light-dark(#1c2330, #e1e9f2);
+  --theme-code-comment: light-dark(#555d6c, #c0c8d1);
+  --theme-code-keyword: light-dark(#36617d, #8cceff);
+  --theme-code-string: light-dark(#196a24, #8bd98d);
+  --theme-code-number: light-dark(#944500, #ffb882);
+  --theme-code-function: light-dark(#6c4b9e, #d3bcff);
+  --theme-code-type: light-dark(#006565, #31dbdb);
+  --theme-code-property: light-dark(#5a51a5, #31dbdb);
+  --theme-ansi-black: light-dark(#1c2330, #c0c8d1);
+  --theme-ansi-red: light-dark(#a3322d, #ffb5ab);
+  --theme-ansi-green: light-dark(#006a12, #7fdb83);
+  --theme-ansi-yellow: light-dark(#755800, #edc23e);
+  --theme-ansi-blue: light-dark(#0b5aae, #9ecbff);
+  --theme-ansi-magenta: light-dark(#8d3a88, #ffaafe);
+  --theme-ansi-cyan: light-dark(#00666c, #00dbe5);
+  --theme-ansi-white: light-dark(#555d6c, #e1e9f2);
+  --theme-category-1: light-dark(#ffcfce, #593030);
+  --theme-category-1-text: light-dark(#6e3537, #fed2d0);
+  --theme-category-2: light-dark(#f7d6b8, #533618);
+  --theme-category-2-text: light-dark(#673f12, #f6d8bc);
+  --theme-category-3: light-dark(#dfe1b7, #3f4017);
+  --theme-category-3-text: light-dark(#4e4e11, #dfe2bc);
+  --theme-category-4: light-dark(#c1e8cd, #20462f);
+  --theme-category-4-text: light-dark(#1f5636, #c5e8d0);
+  --theme-category-5: light-dark(#b3e9eb, #034649);
+  --theme-category-5-text: light-dark(#00555a, #b8e9eb);
+  --theme-category-6: light-dark(#c0e2ff, #1f405b);
+  --theme-category-6-text: light-dark(#1f4e73, #c3e2fe);
+  --theme-category-7: light-dark(#dcd8ff, #3d375a);
+  --theme-category-7-text: light-dark(#4a4273, #ddd9fe);
+  --theme-category-8: light-dark(#f5d0ec, #50314a);
+  --theme-category-8-text: light-dark(#63385a, #f4d2eb);
+}
+
+@media (color-gamut: p3) {
+  :root {
+    --theme-success: light-dark(color(display-p3 0.1559 0.5942 0.2459), #00bf54);
+    --theme-success-solid: color(display-p3 0.0738 0.5422 0.1959);
+    --theme-success-muted: light-dark(
+      color(display-p3 0.1559 0.5942 0.2459 / 0.1),
+      rgba(0, 191, 84, 0.15)
+    );
+    --theme-warning: light-dark(#bd7100, color(display-p3 0.8343 0.5429 0));
+    --theme-warning-solid: light-dark(
+      color(display-p3 0.6474 0.4089 0),
+      color(display-p3 0.6478 0.4092 0)
+    );
+    --theme-warning-muted: light-dark(
+      rgba(189, 113, 0, 0.1),
+      color(display-p3 0.8343 0.5429 0 / 0.15)
+    );
+    --theme-code-number: light-dark(#944500, color(display-p3 1 0.7209 0.5024));
+    --theme-ansi-red: light-dark(#a3322d, color(display-p3 1 0.7032 0.6565));
+    --theme-ansi-cyan: light-dark(color(display-p3 0 0.4024 0.4329), #00dbe5);
+  }
+}

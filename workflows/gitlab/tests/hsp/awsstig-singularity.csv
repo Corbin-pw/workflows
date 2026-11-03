@@ -1,3 +1,4 @@
 date,phase,result,cleanup,workflow_tree,submitter_tree,tools_tree,commit,fetched,branch,user,run_slug,duration_s,error
 2026-10-29T09:12:08Z,warm,pass,ok,0449fa8,162207a,727fc42,9213121-dirty,9213121,gitlab,alvaro,open-duckling,393,
 2026-10-29T10:44:13Z,warm,pass,ok,f7fb495,162207a,727fc42,9ff4e2e,9ff4e2e,gitlab,alvaro,huge-pony,225,
+2026-11-03T17:26:27Z,warm,pass,ok,3e2d74e,162207a,727fc42,be305f7,be305f7,gitlab,alvaro,handy-walleye,273,

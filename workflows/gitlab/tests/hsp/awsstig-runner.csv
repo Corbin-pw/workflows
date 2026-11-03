@@ -1,0 +1,2 @@
+date,phase,result,cleanup,workflow_tree,submitter_tree,tools_tree,commit,fetched,branch,user,run_slug,duration_s,error
+2026-11-03T17:20:21Z,cold,pass,ok,3e2d74e,162207a,727fc42,be305f7,be305f7,gitlab,alvaro,outgoing-mayfly,68,

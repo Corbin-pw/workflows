@@ -1,0 +1,9 @@
+Run equal-hermit: error (20s)
+Reason: executorExitedEarly
+
+Failed jobs/steps:
+
+  preprocessing > Controller Preprocessing (error, 0s)
+    bash: workflows/gitlab/lib/preprocess.sh: No such file or directory
+
+Summary: 1 job(s) failed, 1 step(s) failed

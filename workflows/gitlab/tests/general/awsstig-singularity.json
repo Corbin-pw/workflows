@@ -13,6 +13,7 @@
     }
   },
   "resource": "pw://alvaro/awsstig",
+  "mode": "gitlab",
   "service": {
     "container_runtime": "gitlab-singularity",
     "subdomain": "gitlab-alvaro-test2",

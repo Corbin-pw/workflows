@@ -4,22 +4,27 @@
 # Purpose: Everything the script that pw endpoints run executes does that does
 #          not depend on the container runtime: the public host and the lock,
 #          the nginx snippet (forwarded headers, the OIDC hop page and the
-#          readiness gate), the Linux package's configuration, the wait for the
-#          sign-in page, and the setup after the boot (license, CI runners). The launcher sources it, defines gitlab_exec (run a
-#          command in the container), gitlab_alive (is the container running)
-#          and gitlab_logs (print the tail of its log) for its runtime, starts
-#          the container and calls gitlab_wait_ready, then gitlab_setup.
+#          readiness gate, the route that tells other users' runners where
+#          this GitLab listens), the Linux package's configuration, the wait
+#          for the sign-in page, and the setup after the boot (license, the
+#          owner's group and account, the CI runners through lib/runners.sh).
+#          The launcher sources it, defines gitlab_exec (run a command in the
+#          container), gitlab_alive (is the container running) and gitlab_logs
+#          (print the tail of its log) for its runtime, starts the container
+#          and calls gitlab_wait_ready, then gitlab_setup.
 # Runs on: Controller node, under pw endpoints run (PORT,
 #          PW_ENDPOINT_HOST, PW_ENDPOINT_PATH, PW_ENDPOINT_URL exported)
 #
 # Required Environment Variables (exported by lib/start.sh):
 #   - run_dir: this job's run/ directory (activate/, gitlab.env, launcher.exit)
 #   - service_rundir, service_ssh_port, root_password_file, service_license_file
-#   - runners_shell, runners_slurm, gitlab_runner_bin, jacamar_bin
+#   - runners_shell, runners_slurm, runners_group, runner_root,
+#     gitlab_runner_bin, jacamar_bin
 #   - platform_host, oidc_client_id, oidc_client_secret_file, oidc_display_name,
 #     oidc_block_new_users
-#   - runner_pw_auth (key | host | none) and GITLAB_PW_API_KEY when key
 ################################################################################
+
+source "${gitlab_lib}/runners.sh"
 
 # A failure here ends pw endpoints run with the endpoint already registered,
 # which the start script cannot tell from the cancel that releases a healthy
@@ -73,7 +78,13 @@ gitlab_launcher_init() {
 # 200, while the runners are registered after GitLab answers: until this
 # launcher touches the ready marker that page answers 503 to everyone but
 # this launcher's own probe, so a setup failure fails the run instead of
-# leaving a completed run whose service the cleanup then removed
+# leaving a completed run whose service the cleanup then removed.
+#
+# A user who adds their own runners to this GitLab (the workflow's runner
+# mode) must reach it on this host's loopback, so the snippet also answers,
+# behind the platform's sign-in, which port it listens on, as which uid and
+# on which host: the one piece of information the proxy's routing of the
+# public address vouches for
 gitlab_write_nginx_snippet() {
     local host_re
     host_re=$(printf '%s' "${host}" | sed 's/[.]/\\./g')
@@ -95,6 +106,11 @@ location = /users/sign_in {
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-Ssl on;
+}
+location = /-/activate/host {
+    default_type application/json;
+    add_header Cache-Control no-store;
+    return 200 '{"port": ${PORT}, "uid": $(id -u), "host": "$(hostname)"}';
 }
 location = /users/auth/openid_connect {
     proxy_pass http://gitlab-workhorse;
@@ -205,6 +221,91 @@ gitlab_wait_ready() {
     echo "::notice::GitLab is serving at ${public_url}"
 }
 
+# The group the runners belong to, owned by the launching user's GitLab
+# account: only the pipelines of its projects run on this host as the
+# launching user. The group is created on the first start; with Sign in with
+# ACTIVATE configured, the owner's account is created ahead of their first
+# sign-in with the identity that sign-in will carry (uid_field
+# preferred_username, so extern_uid is the ACTIVATE username) and made the
+# group's Owner, and an account a sign-in created already is made Owner on a
+# later start. Sets runner_type and runner_scope_id for lib/runners.sh
+gitlab_owner_group() {
+    local group_path="${runners_group:-${PW_USER}-ci}" encoded owner_id="" email
+    encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${group_path}")
+    runners_api_call GET "/groups/${encoded}"
+    if [ "${api_status}" = "200" ]; then
+        group_id=$(printf '%s' "${api_body}" | json_get id)
+    else
+        runners_api_call POST /groups \
+            --data-urlencode "name=${group_path}" --data-urlencode "path=${group_path}" \
+            --data "visibility=private" \
+            --data-urlencode "description=Projects whose pipelines run on ${PW_USER}'s CI runners on $(hostname)"
+        group_id=$(printf '%s' "${api_body}" | json_get id)
+        if [ "${api_status}" != "201" ] || [ -z "${group_id}" ]; then
+            fail "Could not create the group ${group_path} for the runners (HTTP ${api_status}): $(printf '%s' "${api_body}" | json_get message)"
+        fi
+        echo "::notice::Created the group ${group_path}: projects in it run their pipelines on this host's runners"
+    fi
+    if [ -n "${oidc_client_id}" ]; then
+        first_user_id() {
+            python3 -c 'import json, sys; l = json.load(sys.stdin); print(l[0]["id"] if l else "")'
+        }
+        runners_api_call GET "/users?provider=openid_connect&extern_uid=${PW_USER}"
+        owner_id=$(printf '%s' "${api_body}" | first_user_id)
+        if [ -z "${owner_id}" ]; then
+            runners_api_call GET "/users?username=${PW_USER}"
+            owner_id=$(printf '%s' "${api_body}" | first_user_id)
+            if [ -n "${owner_id}" ]; then
+                runners_api_call PUT "/users/${owner_id}" --data "provider=openid_connect" --data-urlencode "extern_uid=${PW_USER}"
+                if [ "${api_status}" = "200" ]; then
+                    echo "::notice::GitLab account ${PW_USER} (user ${owner_id}) now signs in with ${oidc_display_name}"
+                else
+                    echo "::warning::GitLab account ${PW_USER} exists without an ${oidc_display_name} identity and could not be given one (HTTP ${api_status}); a sign-in with ${oidc_display_name} creates a second account"
+                fi
+            else
+                # The platform knows the user's email; the run's key may read it
+                email=$(pw api users 2>/dev/null | python3 -c '
+import json, sys
+try:
+    for u in json.load(sys.stdin).get("users", []):
+        if u.get("username") == sys.argv[1]:
+            print(u.get("email", ""))
+            break
+except Exception:
+    pass' "${PW_USER}")
+                if [ -z "${email}" ]; then
+                    email="${PW_USER}@${platform_host}"
+                    echo "::warning::The platform did not tell this run your email; the GitLab account ${PW_USER} gets ${email} (change it in GitLab's profile)"
+                fi
+                runners_api_call POST /users \
+                    --data-urlencode "username=${PW_USER}" --data-urlencode "name=${PW_USER}" \
+                    --data-urlencode "email=${email}" \
+                    --data "provider=openid_connect" --data-urlencode "extern_uid=${PW_USER}" \
+                    --data "force_random_password=true" --data "reset_password=false" --data "skip_confirmation=true"
+                owner_id=$(printf '%s' "${api_body}" | json_get id)
+                if [ "${api_status}" = "201" ] && [ -n "${owner_id}" ]; then
+                    echo "::notice::Created the GitLab account ${PW_USER} (user ${owner_id}) for your first sign-in with ${oidc_display_name}"
+                else
+                    owner_id=""
+                    echo "::warning::Could not create the GitLab account ${PW_USER} ahead of its first sign-in (HTTP ${api_status}): $(printf '%s' "${api_body}" | json_get message). Sign in with ${oidc_display_name} and start again: the account is then made Owner of ${group_path}"
+                fi
+            fi
+        fi
+        if [ -n "${owner_id}" ]; then
+            runners_api_call POST "/groups/${group_id}/members" --data "user_id=${owner_id}" --data "access_level=50"
+            if [ "${api_status}" = "409" ]; then
+                runners_api_call PUT "/groups/${group_id}/members/${owner_id}" --data "access_level=50"
+            fi
+            case "${api_status}" in
+                200|201) echo "::notice::${PW_USER} is Owner of the group ${group_path}" ;;
+                *) echo "::warning::${PW_USER} could not be made Owner of ${group_path} (HTTP ${api_status}): $(printf '%s' "${api_body}" | json_get message)" ;;
+            esac
+        fi
+    fi
+    export runner_type=group_type runner_scope_id="${group_id}"
+    echo "::notice::The runners take the pipelines of the group ${group_path} only (${public_url}${group_path}); create your projects there"
+}
+
 # Everything after the boot goes through the API with a root token that lives
 # for this launcher only; it is revoked at the end. The token never enters
 # the trace
@@ -216,25 +317,14 @@ gitlab_setup() {
     if [ -z "${admin_token}" ]; then
         fail "Could not create a root API token in the container (gitlab-rails runner failed)"
     fi
-    api_call() {
-        # api_call <method> <path> [curl args...]: sets api_status and api_body
-        local method=$1 path=$2 out
-        shift 2
-        out=$(curl -s -w '\n%{http_code}' -X "${method}" -H "PRIVATE-TOKEN: ${admin_token}" -H "Host: ${host}" "$@" "${api}${path}")
-        api_status=${out##*$'\n'}
-        api_body=${out%$'\n'*}
-    }
-    json_get() {
-        # json_get <key> reads a JSON object from stdin
-        python3 -c 'import json, sys; d = json.load(sys.stdin); v = d.get(sys.argv[1], ""); print(v if v is not None else "")' "$1"
-    }
+    export api_base="${api}" api_host="${host}" api_token="${admin_token}"
 
     if [ -s "${service_license_file}" ]; then
         local marker="${service_rundir}/.license-$(sha256sum "${service_license_file}" | cut -c1-16)"
         if [ -f "${marker}" ]; then
             echo "::notice::The license of the form is already applied to ${service_rundir}"
         else
-            api_call POST /license --data-urlencode "license@${service_license_file}"
+            runners_api_call POST /license --data-urlencode "license@${service_license_file}"
             if [ "${api_status}" = "201" ]; then
                 touch "${marker}"
                 echo "::notice::License applied: plan $(printf '%s' "${api_body}" | json_get plan), expires $(printf '%s' "${api_body}" | json_get expires_at)"
@@ -244,147 +334,19 @@ gitlab_setup() {
         fi
     fi
 
-    # Each runner's authentication token is kept in the run directory, so a
-    # later run finds its runners again; the configuration is rewritten on
-    # every start because the GitLab port changes with the endpoint
-    local runner_root="${service_rundir}/runner"
-    mkdir -p "${runner_root}/tokens"
-    chmod 700 "${runner_root}/tokens"
-    register_runner() {
-        # register_runner <kind> <run_untagged>
-        local kind=$1 untagged=$2 token_file="${runner_root}/tokens/$1.token" token
-        if [ -s "${token_file}" ]; then
-            api_call POST /runners/verify --data-urlencode "token@${token_file}"
-            if [ "${api_status}" = "200" ]; then
-                echo "The ${kind} runner is already registered"
-                return 0
-            fi
-            echo "The stored ${kind} runner token is no longer valid (HTTP ${api_status}); registering again"
-        fi
-        api_call POST /user/runners \
-            --data "runner_type=instance_type" \
-            --data-urlencode "description=${kind} runner on $(hostname) (ACTIVATE run ${PW_RUN_SLUG})" \
-            --data "tag_list=${kind}" \
-            --data "run_untagged=${untagged}" \
-            --data "paused=false"
-        token=$(printf '%s' "${api_body}" | json_get token)
-        if [ "${api_status}" != "201" ] || [ -z "${token}" ]; then
-            # The body of a success carries the token, so only the message is shown
-            echo "::error title=Error::Could not register the ${kind} runner (HTTP ${api_status}): $(printf '%s' "${api_body}" | json_get message)"
-            return 1
-        fi
-        (
-            umask 077
-            printf '%s' "${token}" > "${token_file}"
-        )
-        echo "Registered the ${kind} runner"
-    }
-    runner_block() {
-        # runner_block <kind> <executor>
-        local kind=$1 executor=$2
-        cat <<TOMLEOF
+    # The owner's runners: group runners of the owner's group, polling this
+    # GitLab on its own port (same user, no forwarder needed), with their
+    # tokens kept in the run directory for a later start
+    local group_id
+    gitlab_owner_group
+    export runner_url="http://127.0.0.1:${PORT}"
+    if ! runners_setup; then
+        fail "The CI runners were not started (above)"
+    fi
+    set +x
 
-[[runners]]
-  name = "${kind} runner on $(hostname)"
-  url = "http://127.0.0.1:${PORT}/"
-  clone_url = "http://127.0.0.1:${PORT}"
-  token = "$(cat "${runner_root}/tokens/${kind}.token")"
-  executor = "${executor}"
-  shell = "bash"
-  builds_dir = "${runner_root}/builds/${kind}"
-  cache_dir = "${runner_root}/cache/${kind}"
-TOMLEOF
-    }
-    local runners=""
-    if [ "${runners_shell}" = "true" ]; then
-        register_runner shell true || fail "The shell runner was not registered (above)"
-        runners="${runners} shell"
-    fi
-    if [ "${runners_slurm}" = "true" ]; then
-        register_runner slurm false || fail "The SLURM runner was not registered (above)"
-        runners="${runners} slurm"
-    fi
-    if [ -n "${runners}" ]; then
-        mkdir -p "${runner_root}/builds" "${runner_root}/cache"
-        (
-            umask 077
-            {
-                echo "concurrent = 4"
-                echo "check_interval = 3"
-                if [ "${runners_shell}" = "true" ]; then
-                    runner_block shell shell
-                fi
-                if [ "${runners_slurm}" = "true" ]; then
-                    runner_block slurm custom
-                    # Plain jacamar (no jacamar-auth in front) refuses to run
-                    # without --no-auth; every stage takes it
-                    cat <<TOMLEOF
-  [runners.custom]
-    config_exec = "${jacamar_bin}"
-    config_args = ["--no-auth", "config", "--configuration", "${runner_root}/jacamar.toml"]
-    prepare_exec = "${jacamar_bin}"
-    prepare_args = ["--no-auth", "prepare"]
-    run_exec = "${jacamar_bin}"
-    run_args = ["--no-auth", "run"]
-    cleanup_exec = "${jacamar_bin}"
-    cleanup_args = ["--no-auth", "cleanup", "--configuration", "${runner_root}/jacamar.toml"]
-    graceful_kill_timeout = 600
-    force_kill_timeout = 300
-TOMLEOF
-                fi
-            } > "${runner_root}/config.toml"
-        )
-        if [ "${runners_slurm}" = "true" ]; then
-            mkdir -p "${runner_root}/jacamar"
-            chmod 700 "${runner_root}/jacamar"
-            # Jacamar runs the stages it keeps on this host (sources, artifacts,
-            # cache) as `env -i bash --login` scripts, so the runner's
-            # environment never reaches them, and the artifact and cache stages
-            # look gitlab-runner up by name ("Missing gitlab-runner. Uploading
-            # artifacts is disabled." otherwise): the binary is linked into
-            # ~/bin, which the login profile puts on the PATH. Jacamar's
-            # user_bash_env is no alternative: it is passed to env -i as is,
-            # so a PATH set there replaces the profile's (verified)
-            mkdir -p "${HOME}/bin"
-            ln -sfn "${gitlab_runner_bin}" "${HOME}/bin/gitlab-runner"
-            if ! env -i HOME="${HOME}" USER="$(id -un)" /bin/bash --login -c 'command -v gitlab-runner' >/dev/null 2>&1; then
-                echo "::warning::A login shell on $(hostname) does not find ~/bin/gitlab-runner on its PATH: jobs of the SLURM runner cannot upload artifacts or caches. Add \$HOME/bin to the PATH in your shell profile"
-            fi
-            # Jacamar verifies the job's id token against GitLab's keys; fetched
-            # through the public URL they come back as the platform's sign-in page
-            cat > "${runner_root}/jacamar.toml" <<TOMLEOF
-[general]
-  executor = "slurm"
-  data_dir = "${runner_root}/jacamar"
-  gitlab_server = "http://127.0.0.1:${PORT}"
-TOMLEOF
-        fi
-        # The runner outlives this run like the container does and must not die
-        # with the endpoint's process tree by accident, so it gets a session of
-        # its own, which cancel.sh kills by session id. Its environment is the
-        # shell runner's jobs' environment: the binary's directory joins the
-        # PATH for the artifact and cache stages, and the run's API key, which
-        # dies with the run, gives way to the credential lib/start.sh chose
-        # (the key the form carried, or the host's own sign-in, or none)
-        local runner_env=(env -u PW_API_KEY)
-        if [ "${runner_pw_auth}" = "key" ]; then
-            runner_env=(env "PW_API_KEY=${GITLAB_PW_API_KEY}")
-        fi
-        PATH="${gitlab_runner_bin%/*}:${PATH}" setsid nohup "${runner_env[@]}" "${gitlab_runner_bin}" run \
-            --config "${runner_root}/config.toml" \
-            --working-directory "${runner_root}" \
-            > "${runner_root}/runner.log" 2>&1 < /dev/null &
-        echo $! > "${run_dir}/runner.pid"
-        sleep 3
-        if ! kill -0 "$(cat "${run_dir}/runner.pid")" 2>/dev/null; then
-            tail -n 30 "${runner_root}/runner.log"
-            fail "gitlab-runner exited right after starting (log above)"
-        fi
-        echo "::notice::CI runners started:${runners} (log: ${runner_root}/runner.log)"
-    fi
-
-    api_call DELETE /personal_access_tokens/self
-    unset admin_token
+    runners_api_call DELETE /personal_access_tokens/self
+    unset admin_token api_token
     set -x
 
     echo "::notice::Sign in as root with the password in ${root_password_file} (first start) or the one you set in GitLab"
@@ -392,6 +354,7 @@ TOMLEOF
         echo "::notice::Sign in with ${oidc_display_name} from GitLab's own tab (${public_url}users/sign_in): redirect URI ${public_url}users/auth/openid_connect/callback"
     fi
     echo "::notice::Git over HTTP from this host: http://127.0.0.1:${PORT}/<group>/<project>.git; from your machine: pw forward -L ${PORT}:localhost:${PORT} <cluster> (or -L ${service_ssh_port}:localhost:${service_ssh_port} for SSH)"
+    echo "::notice::Another user of this GitLab runs their own pipelines by launching this workflow in its runner mode on this cluster with ${public_url} as the GitLab address"
 
     # Opens the sign-in page to the platform's probe: the run completes from here
     touch "${run_dir}/activate/ready"

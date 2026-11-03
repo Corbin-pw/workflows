@@ -4,3 +4,8 @@ date,phase,result,cleanup,workflow_tree,submitter_tree,tools_tree,commit,fetched
 2026-10-29T10:37:59Z,warm,pass,ok,f7fb495,162207a,727fc42,9ff4e2e,9ff4e2e,gitlab,alvaro,amusing-hyena,363,
 2026-10-29T13:44:39Z,warm,pass,ok,134c1bd,162207a,727fc42,f33499d,f33499d,gitlab,alvaro,healthy-bluejay,224,
 2026-10-29T14:15:17Z,warm,fail,unknown,7965e9a,162207a,727fc42,a8aca68,a8aca68,gitlab,alvaro,measured-tetra,161,"run error, expected completed: session_runner > Exit Workflow with Error (error, 0s)"
+2026-11-03T16:50:44Z,cold,pass,kept,3b8ec5c,162207a,727fc42,1eb10cb,1eb10cb,gitlab,alvaro,mature-skunk,431,
+2026-11-03T17:03:11Z,warm,pass,kept,3e2d74e,162207a,727fc42,be305f7,be305f7,gitlab,alvaro,amused-rabbit,241,
+2026-11-03T17:22:12Z,warm,pass,ok,3e2d74e,162207a,727fc42,be305f7,be305f7,gitlab,alvaro,careful-lioness,242,
+2026-11-03T17:41:11Z,warm,fail,kept,92e43f1,162207a,727fc42,b056678-dirty,2469a44,gitlab,alvaro,funky-frog,37,"run error, expected completed: preprocessing > Controller Preprocessing (error, 0s)"
+2026-11-03T17:43:53Z,warm,pass,kept,de3742d,162207a,727fc42,1e39dd1,1e39dd1,gitlab,alvaro,usable-leech,257,

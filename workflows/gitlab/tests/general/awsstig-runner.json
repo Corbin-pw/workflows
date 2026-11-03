@@ -1,0 +1,23 @@
+{
+  "_test": {
+    "timeout_s": 900,
+    "warm_marker": "${HOME}/gitlab-runner-test/tokens/shell.token",
+    "leftover_patterns": [
+      "gitlab-runner run",
+      "runner-service.py",
+      "pw endpoints run"
+    ],
+    "secrets": {
+      "runners.token": "GITLAB_TEST_RUNNER_TOKEN"
+    }
+  },
+  "resource": "pw://alvaro/awsstig",
+  "mode": "runner",
+  "runners": {
+    "gitlab_url": "https://gitlab-alvaro-test2.activate.pw",
+    "path": "alvaro-ci",
+    "rundir": "${HOME}/gitlab-runner-test",
+    "shell": true,
+    "slurm": true
+  }
+}

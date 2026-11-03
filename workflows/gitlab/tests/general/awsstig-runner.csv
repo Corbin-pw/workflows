@@ -1,0 +1,5 @@
+date,phase,result,cleanup,workflow_tree,submitter_tree,tools_tree,commit,fetched,branch,user,run_slug,duration_s,error
+2026-11-03T17:00:04Z,cold,pass,ok,3b8ec5c,162207a,727fc42,1eb10cb,1eb10cb,gitlab,alvaro,secure-firefly,68,
+2026-11-03T17:07:52Z,cold,pass,kept,3e2d74e,162207a,727fc42,be305f7,be305f7,gitlab,alvaro,striking-gazelle,53,
+2026-11-03T17:41:54Z,warm,fail,ok,92e43f1,162207a,727fc42,b056678-dirty,2469a44,gitlab,alvaro,equal-hermit,38,"run error, expected completed: preprocessing > Controller Preprocessing (error, 0s)"
+2026-11-03T17:48:18Z,warm,pass,ok,de3742d,162207a,727fc42,1e39dd1,1e39dd1,gitlab,alvaro,caring-grubworm,68,
