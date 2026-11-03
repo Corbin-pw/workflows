@@ -32,6 +32,14 @@ jobs:
           worker="${PW_MATRIX_INDEX:-}"
           endpoint_name="fractal-${PW_RUN_SLUG}-${{ inputs.resource.name }}${worker:+-w${worker}}"
           echo "ENDPOINT_NAME=${endpoint_name}" | tee -a $OUTPUTS
+          # Every worker asks for the same subdomain. It is the page's fixed URL,
+          # and the race's lock: a subdomain belongs to one endpoint at a time, so
+          # the first worker to register gets it and the others are refused.
+          # Empty means fractal-<your username>, folded to a valid DNS label.
+          subdomain="${{ inputs.subdomain }}"
+          [ -n "${subdomain}" ] || subdomain="fractal-${PW_USER}"
+          subdomain=$(echo "${subdomain}" | tr '[:upper:]' '[:lower:]' | tr '_.' '--')
+          echo "SUBDOMAIN=${subdomain}" | tee -a $OUTPUTS
           cat <<EOF >> script.sh
           # Everything the script needs is baked in NOW (expanded at write time):
           # the workflow-level env: does NOT reach the script_submitter subworkflow
@@ -39,12 +47,24 @@ jobs:
           # compute node.
           export RESOLUTION=${{ inputs.resolution }}
           command -v pw >/dev/null 2>&1 || export PATH="\${PATH}:\${HOME}/pw"
-          pw endpoints run --name ${endpoint_name} -- ${PWD}/demo-app/run.sh
+          pw endpoints run --name ${endpoint_name} --subdomain ${subdomain} -- ${PWD}/demo-app/run.sh
           EOF
           chmod +x script.sh
           # We need to pass the PATH to the script submitter subworkflow
           echo "SCRIPT_PATH=${PWD}/script.sh" | tee -a $OUTPUTS
           echo "SKIP_CLEANUP_PATH=${PWD}/SKIP_CLEANUP" | tee -a $OUTPUTS
+      - name: Take Over the URL
+        run: |
+          command -v pw >/dev/null 2>&1 || export PATH="${PATH}:${HOME}/pw"
+          # An earlier run's page may still be serving at this URL, and a stopped
+          # endpoint keeps its subdomain until it is deleted. Delete every endpoint
+          # on the URL that is not from this run, so this run's workers can claim it.
+          subdomain="${{ needs.install.outputs.SUBDOMAIN }}"
+          pw endpoints list | awk -v prefix="fractal-${PW_RUN_SLUG}-" -v host="//${subdomain}." \
+            'index($1, prefix) != 1 && index($3, host) > 0 { print $1 }' | while read -r old; do
+            echo "::notice::Deleting endpoint ${old}, which holds ${subdomain}"
+            pw endpoints delete "${old}" || true
+          done
 
 
   script_submitter:
@@ -78,18 +98,28 @@ jobs:
           pbs:
             is_enabled: ${{ inputs.pbs.is_enabled }}
             scheduler_directives: ${{ inputs.pbs.scheduler_directives }}
-      # Same guard as Stage 4: on the happy path this job is CANCELED by
-      # first_start_wins (win or lose) before the step above returns, so
-      # reaching these steps means this worker's render died before the race
-      # was decided. Stop our poller and fail this worker loud — the parent's
-      # fail-fast takes it from there.
+      # Stage 4's guard, with one more way to get here: on the happy path this
+      # job is CANCELED by first_start_wins (win or lose) before the step above
+      # returns. It returns early when another worker already holds the URL (this
+      # worker's pw endpoints run is refused and exits) or when the render died.
+      # Stop our poller either way; a lost race ends quietly, a dead render fails
+      # loud and the parent's fail-fast takes it from there.
       - name: Cancel First Start Wins
         uses: parallelworks/cancel-jobs
         with:
           jobs:
             - first_start_wins
-      - name: Exit Workflow with Error
+      - name: Lost the Race or Failed
+        ssh:
+          remoteHost: ${{ inputs.resource.ip }}
         run: |
+          command -v pw >/dev/null 2>&1 || export PATH="${PATH}:${HOME}/pw"
+          holder=$(pw endpoints list | awk -v prefix="fractal-${PW_RUN_SLUG}-" -v me="${{ needs.install.outputs.ENDPOINT_NAME }}" \
+            'index($1, prefix) == 1 && $1 != me { print $1; exit }')
+          if [ -n "${holder}" ]; then
+            echo "::notice::${holder} holds the URL — this worker lost the race"
+            exit 0
+          fi
           echo "::error title=Error::The fractal script exited before its endpoint came online"
           exit 1
 
@@ -108,42 +138,27 @@ jobs:
           command -v pw >/dev/null 2>&1 || export PATH="${PATH}:${HOME}/pw"
           # Decide whether this worker keeps its endpoint or stands down, looking
           # only at THIS run's fractal endpoints (name starts with
-          # fractal-<run-slug>-, status running). "First start wins" = the first
-          # endpoint that is actually RUNNING keeps serving; every other worker
-          # cancels itself. The tie-break is list order — whichever running
-          # endpoint `pw endpoints list` returns first is the winner, and every
-          # worker reads the same list, so they all pick the same one.
-          # permissions: ['*'] authenticates pw.
+          # fractal-<run-slug>-). They all ask for the same subdomain, which one
+          # endpoint at a time can hold, so at most one of them exists: once it
+          # is running, the race is decided. Its worker wins; every other worker
+          # cancels itself. permissions: ['*'] authenticates pw.
           PREFIX="fractal-${PW_RUN_SLUG}-"
           MY_NAME="${{ needs.install.outputs.ENDPOINT_NAME }}"
 
-          # Prints one word: WAIT | WIN | LOSE.
-          decision=$(pw endpoints list | awk -v prefix="${PREFIX}" -v me="${MY_NAME}" '
-            index($1, prefix) == 1 && $2 == "running" && !first { first = $1 }
-            END {
-              if (!first)          print "WAIT"
-              else if (first == me) print "WIN"
-              else                  print "LOSE"
-            }')
-          echo "$(date) run=${PW_RUN_SLUG} me=${MY_NAME} decision=${decision:-<none>}"
+          holder=$(pw endpoints list | awk -v prefix="${PREFIX}" \
+            'index($1, prefix) == 1 && $2 == "running" { print $1; exit }')
+          echo "$(date) run=${PW_RUN_SLUG} me=${MY_NAME} holder=${holder:-<none>}"
 
-          # No endpoint running for this run yet (or a transient empty list): keep polling.
-          if [ "${decision}" = "WAIT" ] || [ -z "${decision}" ]; then
-            echo "No running endpoint for this run yet — waiting"
+          # No endpoint of this run holds the URL yet (or a transient empty list): keep polling.
+          if [ -z "${holder}" ]; then
+            echo "No endpoint of this run holds the URL yet — waiting"
             exit 1
           fi
 
-          if [ "${decision}" = "WIN" ]; then
-            # The endpoint list is eventually consistent, so a worker that started
-            # earlier may not be listed yet — a worker that only sees itself would
-            # wrongly win. Confirm we stay first across a few polls before committing.
-            if [ "${PW_WORKFLOW_STEP_CURRENT_RETRY:-0}" -lt 3 ]; then
-              echo "::notice::${MY_NAME} leading so far — confirming (attempt ${PW_WORKFLOW_STEP_CURRENT_RETRY:-0})"
-              exit 1
-            fi
-            URL=$(pw endpoints list | grep -w "${MY_NAME}" | awk '{print $3}')
+          if [ "${holder}" = "${MY_NAME}" ]; then
+            URL=$(pw endpoints list | awk -v me="${MY_NAME}" '$1 == me { print $3 }')
             echo "URL=${URL}" | tee -a $OUTPUTS
-            echo "::notice::${MY_NAME} is the first running endpoint — winner; serving at ${URL}"
+            echo "::notice::${MY_NAME} holds the URL — winner; serving at ${URL}"
             # Winner: create the skip file so the cancel below leaves the job
             # serving (Stage 4's trick). The run completes; the page stays up.
             touch ${{ needs.install.outputs.SKIP_CLEANUP_PATH }}
@@ -151,15 +166,14 @@ jobs:
             exit 0
           fi
 
-          # decision == LOSE: another worker's endpoint is running ahead of us.
-          # No skip file for us — the cancel below kills our render and our
-          # endpoint deregisters with it.
-          echo "::notice::another endpoint is running ahead of ${MY_NAME} — standing down"
+          # Another worker holds the URL. No skip file for us — the cancel below
+          # removes our job, queued or not.
+          echo "::notice::${holder} holds the URL — ${MY_NAME} standing down"
       - name: Cancel Script Submitter
         # Winner and loser both cancel the submitter; the skip file decides what
         # that means. Winner: cleanup skipped, job keeps serving. Loser:
-        # cleanups run, the job dies, and the endpoint deregisters on its own —
-        # the guarded delete is a defensive no-op for a lingering process.
+        # cleanups run and the job dies — the guarded delete is a defensive no-op
+        # for a lingering process.
         uses: parallelworks/cancel-jobs
         with:
           jobs:
@@ -184,6 +198,12 @@ jobs:
         min: 100
         max: 10000
         step: 1
+      subdomain:
+        type: string
+        label: URL subdomain
+        description: The page is served at this subdomain, the same URL on every run. Empty means fractal-<your username>.
+        tooltip: A run takes the URL over — an earlier run's page still serving there is deleted.
+        optional: true
       scheduler:
         type: boolean
         default: false

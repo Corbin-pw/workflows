@@ -14,7 +14,7 @@ Seven stages build it up, one concept at a time — stages 5–7 are three diffe
 | 3 | [`03-exit-workflow.yaml`](03-exit-workflow.yaml) | Detach with `setsid`: the run completes while the page keeps serving |
 | 4 | [`04-subworkflow.yaml`](04-subworkflow.yaml) | Submit through SLURM/PBS with `script_submitter` — same ending as Stage 3 |
 | 5 | [`05-matrix.yaml`](05-matrix.yaml) | The list all at once: one render per worker (matrix) — keep all N |
-| 6 | [`06-first-start-wins.yaml`](06-first-start-wins.yaml) | The list as a race: N start, the first endpoint up wins, the rest stand down |
+| 6 | [`06-first-start-wins.yaml`](06-first-start-wins.yaml) | The list as a race for one fixed URL: N start, the first endpoint up takes it, the rest stand down |
 | 7 | [`07-failover.yaml`](07-failover.yaml) | The list one at a time: fail over on error or timeout, first success wins |
 
 By the end of this tutorial you will understand how to:
@@ -30,7 +30,7 @@ By the end of this tutorial you will understand how to:
 - Keep a scheduled job cancelable while it is queued, then hand it off cleanly once the page is up, with the submitter's `skip_cleanups_file`
 - Build a form that adapts to the chosen resource with dynamic dropdowns and show/hide rules
 - Fan out the same workflow across a whole list of resources at once with a `matrix` strategy
-- Turn that fan-out into a race where the first endpoint to come up wins and the losing workers stop themselves
+- Turn that fan-out into a race for one fixed URL, where the first endpoint to come up takes it and the losing workers stop themselves
 - Fail over across an ordered list of resources — one attempt at a time, driven by a `retry` block and the attempt counter — instead of fanning out
 
 ---
@@ -591,11 +591,31 @@ Each worker runs Stage 4, so each worker finishes once its endpoint is up — th
 
 ---
 
-## Stage 6 — First start wins: race a list of resources (`06-first-start-wins.yaml`)
+## Stage 6 — First start wins: race a list of resources for one URL (`06-first-start-wins.yaml`)
 
-Stage 5 fanned the render out to **every** resource and left you with one endpoint per worker. Stage 6 keeps the same fan-out but treats the list as a **race**: every worker starts, the first one whose endpoint is **running** wins, and the rest stop themselves — their render is torn down and their endpoint disappears with it. The run then completes with exactly one page serving: Stage 4's ending, decided by a race. This is [`06-first-start-wins.yaml`](06-first-start-wins.yaml) and its subworkflow [`06-first-start-wins-subworkflow.yaml`](06-first-start-wins-subworkflow.yaml).
+Stage 5 fanned the render out to **every** resource and left you with one endpoint per worker, each at its own random URL. Stage 6 keeps the same fan-out but treats the list as a **race for one fixed URL**: every worker asks for the same subdomain, the first one to register gets it, and the rest stop themselves — their render is torn down without ever getting a URL. The run then completes with exactly one page serving, at an address you know before you press Run: Stage 4's ending, decided by a race. This is [`06-first-start-wins.yaml`](06-first-start-wins.yaml) and its subworkflow [`06-first-start-wins-subworkflow.yaml`](06-first-start-wins-subworkflow.yaml).
 
-The parent is Stage 5 with the `$yaml` swapped to the racing subworkflow. All the racing lives in the subworkflow: it is Stage 4's `install` → `script_submitter` pipeline (skip file included) with `wait_for_endpoint` replaced by a job that waits for the *race*, `first_start_wins`:
+The parent is Stage 5 with the `$yaml` swapped to the racing subworkflow and one more input, **URL subdomain** (empty means `fractal-<your username>`), handed to every worker. All the racing lives in the subworkflow: it is Stage 4's `install` → `script_submitter` pipeline (skip file included) with three changes. `install` puts the subdomain on the endpoint and clears it of earlier runs:
+
+```yaml
+      - name: Create Run Script
+        run: |
+          # ... endpoint_name as in Stage 4 ...
+          subdomain="${{ inputs.subdomain }}"
+          [ -n "${subdomain}" ] || subdomain="fractal-${PW_USER}"      # folded to a DNS label
+          echo "SUBDOMAIN=${subdomain}" | tee -a $OUTPUTS
+          # ... script.sh as in Stage 4, now ending in:
+          #   pw endpoints run --name ${endpoint_name} --subdomain ${subdomain} -- ${PWD}/demo-app/run.sh
+      - name: Take Over the URL
+        run: |
+          # delete every endpoint on this URL whose name is not from this run
+          pw endpoints list | awk -v prefix="fractal-${PW_RUN_SLUG}-" -v host="//${subdomain}." \
+            'index($1, prefix) != 1 && index($3, host) > 0 { print $1 }' | while read -r old; do
+            pw endpoints delete "${old}" || true
+          done
+```
+
+`wait_for_endpoint` is replaced by a job that waits for the *race*, `first_start_wins`:
 
 ```yaml
   first_start_wins:
@@ -605,62 +625,59 @@ The parent is Stage 5 with the `$yaml` swapped to the racing subworkflow. All th
       remoteHost: ${{ inputs.resource.ip }}
     steps:
       - name: First Start Wins
-        retry:                                  # poll until the endpoints show up
+        retry:                                  # poll until an endpoint of this run holds the URL
           max-retries: 8640
           interval: 10s
         run: |
           PREFIX="fractal-${PW_RUN_SLUG}-"
           MY_NAME="${{ needs.install.outputs.ENDPOINT_NAME }}"   # built and published by install
 
-          # Prints one word: WAIT | WIN | LOSE. First RUNNING endpoint whose
-          # name carries this run's prefix wins; list order is the tie-break.
-          decision=$(pw endpoints list | awk -v prefix="${PREFIX}" -v me="${MY_NAME}" '
-            index($1, prefix) == 1 && $2 == "running" && !first { first = $1 }
-            END {
-              if (!first)          print "WAIT"
-              else if (first == me) print "WIN"
-              else                  print "LOSE"
-            }')
+          # At most one of this run's endpoints exists: the one holding the URL.
+          holder=$(pw endpoints list | awk -v prefix="${PREFIX}" \
+            'index($1, prefix) == 1 && $2 == "running" { print $1; exit }')
 
-          [ "${decision}" = "WAIT" ] && exit 1     # nothing running yet → keep polling
-          if [ "${decision}" = "WIN" ]; then
-            # stay first for a few polls (the list is eventually consistent), then win
-            [ "${PW_WORKFLOW_STEP_CURRENT_RETRY:-0}" -lt 3 ] && exit 1
-            URL=$(pw endpoints list | grep -w "${MY_NAME}" | awk '{print $3}')
+          [ -z "${holder}" ] && exit 1             # nobody holds it yet → keep polling
+          if [ "${holder}" = "${MY_NAME}" ]; then
+            URL=$(pw endpoints list | awk -v me="${MY_NAME}" '$1 == me { print $3 }')
             echo "URL=${URL}" | tee -a $OUTPUTS
             touch ${{ needs.install.outputs.SKIP_CLEANUP_PATH }}   # winner: disarm the cleanups
             sleep 2
             exit 0
           fi
-          echo "::notice::losing — standing down"   # loser: leave the cleanups armed
+          echo "::notice::${holder} holds the URL — standing down"   # loser: leave the cleanups armed
       - name: Cancel Script Submitter               # winner AND loser reach here
         uses: parallelworks/cancel-jobs
         with:
           jobs:
             - script_submitter
-        cleanup: test -f ${{ needs.install.outputs.SKIP_CLEANUP_PATH }} || pw endpoints delete "fractal-${PW_RUN_SLUG}-${{ inputs.resource.name }}" || true
+        cleanup: test -f ${{ needs.install.outputs.SKIP_CLEANUP_PATH }} || pw endpoints delete "${{ needs.install.outputs.ENDPOINT_NAME }}" || true
 ```
+
+And Stage 4's failure tail learns to tell a lost race from a dead render (last concept below).
 
 ### Concepts introduced
 
-**The scoreboard is `pw endpoints list`, keyed by name prefix.**
-Every worker's endpoint starts with `fractal-<run-slug>-` (built in Stage 4), so a prefix match on the first column plus `status == running` isolates *this run's* endpoints with a few lines of `awk`. Among those, the **first one the list returns** is the winner and every other worker stands down. List order is the universal tie-breaker: every worker reads the same list, so they all pick the same winner. Only running endpoints count, so a worker whose own endpoint isn't up yet while another's is simply loses.
+**A fixed URL is a lock.**
+A subdomain belongs to one endpoint at a time, platform-wide. Every worker runs `pw endpoints run --subdomain <the same label>`: the first registration gets it, and every later one is refused on the spot (`Something with that name already exists`) — that worker's `pw endpoints run` exits without starting the render. So the platform decides the race, atomically: at most one of this run's endpoints ever exists, and the scoreboard is simply *who holds the URL* — the `running` endpoint whose name carries this run's `fractal-<run-slug>-` prefix. Every worker reads the same single holder, so there is no tie to break and no settling to wait for.
 
-**Confirm before committing — the endpoint list is eventually consistent.**
-Just after two endpoints register, each worker can briefly see only *its own* running and think it won. So a worker that is currently in front re-checks for a few polls (guarded by `PW_WORKFLOW_STEP_CURRENT_RETRY`) before it commits; a worker that was actually beaten sees the winning endpoint on a later poll and steps aside. Without this settle, two workers can both "win."
+**Names stay per worker; only the subdomain is shared.**
+It is tempting to give every worker the same `--name` too. Don't: registering a name that already exists **takes the endpoint over** (that is what makes re-running `pw endpoints run --name x` safe), so the *last* worker to start would win, and a loser's cleanup would delete the winner's endpoint. Stage 4's per-worker names stay, and the shared subdomain does the locking.
+
+**The URL outlives the run, so the next run takes it over.**
+Stage 4's ending leaves the winner serving after the run completes — at the very URL the next run wants. A *stopped* endpoint holds its subdomain too, until it is deleted (one without `--keep` is deleted after a 24-hour grace period). `Take Over the URL` deletes every endpoint on the subdomain whose name is not from this run: the previous page and its job go away, and this run's workers race for the address. To keep two pages side by side, give the second run a different **URL subdomain**. The default, `fractal-<your username>`, keeps your runs from colliding with other users' (`PW_USER` is set in every step; the label is lowercased and `_`/`.` become `-`). A fixed subdomain needs a platform with a sessions domain, like `activate.pw`.
 
 **One cancel, two meanings — the skip file decides.**
-Winner and losers end exactly the same way: cancel your own `script_submitter`. What that cancel *does* is decided entirely by Stage 4's skip file:
+Winner and losers that reach `first_start_wins`' verdict end exactly the same way: cancel your own `script_submitter`. What that cancel *does* is decided entirely by Stage 4's skip file:
 
 | | The winner | A loser |
 |---|---|---|
-| Before canceling | publishes the winning URL and **touches `SKIP_CLEANUP`** | leaves the file untouched |
-| The submitter's cleanup | finds the file — the render keeps serving | runs — the render is killed, and its endpoint deregisters on its own (an endpoint *is* its client process) |
+| Before canceling | publishes the URL and **touches `SKIP_CLEANUP`** | leaves the file untouched |
+| The submitter's cleanup | finds the file — the render keeps serving | runs — a queued job is `scancel`/`qdel`ed, a running one killed |
 
-The guarded `pw endpoints delete` in the [`cleanup:`](https://parallelworks.com/docs/run/workflows/building-workflows/yaml-fields#jobsjobstepscleanup) is a defensive no-op for a loser process that lingers — the file test keeps it away from the winner's endpoint. When the dust settles, the whole fan-out has **completed** and exactly one page is serving; delete its endpoint later, like every stage since 3.
+The guarded `pw endpoints delete` in the [`cleanup:`](https://parallelworks.com/docs/run/workflows/building-workflows/yaml-fields#jobsjobstepscleanup) is a defensive no-op for a loser process that lingers — the file test keeps it away from the winner's endpoint. When the dust settles, the whole fan-out has **completed** and exactly one page is serving at the URL you chose; delete its endpoint later, like every stage since 3, or let the next run take it over.
 
-**Stage 4's failure tail guards the race too.**
-The subworkflow's `script_submitter` keeps the same two trailing steps: a worker whose render dies before the race is decided cancels its own `first_start_wins` poller (which would otherwise poll out its window) and fails loud — the parent's `fail-fast: true` then stands the other workers down. And `first_start_wins` carries `early-cancel: any-job-failed` for the mirror case, a submitter that fails outright.
+**Stage 4's failure tail tells a lost race from a dead render.**
+A worker whose job starts after the URL is taken does not wait for `first_start_wins`: its `pw endpoints run` is refused, the script exits, and the submitter returns. So the tail asks one question before failing: does another endpoint of this run hold the URL? Then this worker simply lost — it stops its poller and ends quietly, and the parent's `fail-fast: true` leaves the winner alone. Otherwise the render died before anyone held the URL, and the tail fails loud as in Stage 4: the parent's fail-fast stands the other workers down. And `first_start_wins` carries `early-cancel: any-job-failed` for the mirror case, a submitter that fails outright.
 
 ---
 

@@ -16,6 +16,7 @@ jobs:
           $yaml: tutorials/endpoint-workflows/06-first-start-wins-subworkflow.yaml
           resource: ${{ matrix.worker.resource }}
           resolution: ${{ inputs.resolution }}
+          subdomain: ${{ inputs.subdomain }}
           scheduler: ${{ matrix.worker.scheduler }}
           slurm:
             is_enabled: ${{ matrix.worker.slurm.is_enabled }}
@@ -36,10 +37,16 @@ jobs:
         min: 100
         max: 10000
         step: 1
+      subdomain:
+        type: string
+        label: URL subdomain
+        description: The winner serves the page at this subdomain, the same URL on every run. Empty means fractal-<your username>.
+        tooltip: A run takes the URL over — an earlier run's page still serving there is deleted.
+        optional: true
       workers:
         type: list
         label: Compute resources
-        tooltip: The resources that race. Every worker starts a render; the first endpoint up wins and the rest stand down.
+        tooltip: The resources that race. Every worker starts a render; the first one up takes the URL and the rest stand down.
         template:
           resource:
             type: compute-clusters
