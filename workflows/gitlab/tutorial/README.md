@@ -1,10 +1,10 @@
 # Tutorial: run your code on the cluster from GitLab
 
-In about 45 minutes you will launch a GitLab with the workflow, create a project and
-run a first job on the cluster's login node, drive every other system of your ACTIVATE
-account from a pipeline with the `pw` CLI, run jobs on the compute nodes through SLURM,
-and make a pipeline run on its own, at every change and on a schedule. No GitLab
-experience is needed; `sbatch` should ring a bell.
+In about 30 minutes you will create a project and run a first job on the cluster's
+login node, drive every other system of your ACTIVATE account from a pipeline with the
+`pw` CLI, run jobs on the compute nodes through SLURM, and make a pipeline run on its
+own, at every change and on a schedule. No GitLab experience is needed; `sbatch`
+should ring a bell.
 
 ```mermaid
 flowchart LR
@@ -39,49 +39,34 @@ Five words GitLab uses:
 | **runner** | a program that takes jobs from GitLab and runs them somewhere; a job picks its runner with **tags** |
 | **`.gitlab-ci.yml`** | the file at the root of the repository that defines the jobs |
 
-The workflow registers two runners with your GitLab: a **shell** runner (tag `shell`)
-that runs jobs on the login node, and a **SLURM** runner (tag `slurm`) that submits each
-job with `sbatch`, through [Jacamar CI](https://gitlab.com/ecp-ci/jacamar-ci). **Both run
-every job as the user who launched the workflow**, on that user's cluster account, with
-that user's `pw` sign-in, whoever signed in to GitLab and started the pipeline. A job can
-therefore do what the workflow's owner can do on the cluster, and every example below
-prints the host and the user it runs as so you can see it. The tutorial uses the runners
-in this order: the shell runner alone, the shell runner with `pw`, then the SLURM runner.
+## Before you start
 
-Throughout, `<resource>` stands for the cluster you launch GitLab on, as `pw cluster ls`
-names it. Where an example shows `sbatch` options (steps 4 and 5), replace them with what
-your cluster requires: many HPC systems want an account, a partition or a QoS on every
-job.
+You need two things; the workflow's [README](../README.md) covers both:
 
-## Step 1: launch GitLab with both runners
+- **A GitLab served by this workflow.** Its owner launched it and shares it from the
+  platform's sessions page. Open it **in its own browser tab** (it does not work
+  inside the platform's embedded view) and sign in with the **ACTIVATE** button.
+- **Your own runners on it**, shell and SLURM, since every job runs as the user whose
+  runner takes it. Launching the workflow with **Register a shell runner** and
+  **Register a SLURM runner** on registered both, serving your group `<username>-ci`.
+  On a GitLab someone else launched you have none: create the project first (step 1),
+  then register yours for it (the README's *Adding your runners to someone else's
+  GitLab*).
 
-In the ACTIVATE marketplace open the **GitLab** workflow and fill the form:
+Throughout, `<resource>` stands for the cluster GitLab runs on, as `pw cluster ls`
+names it. Where an example shows `sbatch` options (steps 3 and 4), replace them with
+what your cluster requires: many HPC systems want an account, a partition or a QoS on
+every job.
 
-| Field | Set it to |
-|---|---|
-| Service host | a SLURM cluster of yours that is on |
-| CI/CD runners → Register a shell runner | on (the default) |
-| CI/CD runners → Register a SLURM runner | **on** (it only shows for SLURM clusters) |
-| CI/CD runners → ACTIVATE API key | on a cloud cluster, an API key of yours (**Account → Authentication → API keys** in ACTIVATE); step 3 needs it. The field is not shown on a cluster connected through the ACTIVATE agent, where `pw` is signed in already |
-| everything else | the defaults |
-
-Launch. The first start takes five to ten minutes: GitLab creates its database, then
-the workflow registers the runners; the run completes when GitLab's sign-in page
-answers. Open the address the run shows **in its own browser tab**: GitLab does not work
-inside the platform's embedded view.
-
-Sign in with the **ACTIVATE** button when the workflow was launched with the *Sign in
-with ACTIVATE* client: your ACTIVATE account becomes a GitLab account on the first
-sign-in, and it can create projects, which is all the tutorial needs. GitLab's `root`
-account exists too, for administration; its password is the one given in the form or
-the one the workflow generated into the run directory (`pw ssh <resource> cat
-gitlab/.root_password`), and without the ACTIVATE client it is the way in.
-
-## Step 2: a first job on the login node
+## Step 1: a first job on the login node
 
 1. **Create a project.** Click **+** at the top of the sidebar → **New project/repository**
-   → **Create blank project**. Name it `hpc-pipeline`, leave *Initialize repository with a
-   README* checked, click **Create project**.
+   → **Create blank project**. Name it `hpc-pipeline` and pick its namespace under
+   *Project URL*: your runners' group `<username>-ci` if you launched the workflow, any
+   namespace of yours otherwise (you register your runners for it next, see *Before
+   you start* above, with **Project or group** set to its full path,
+   `<namespace>/hpc-pipeline`). Leave *Initialize repository with a README* checked,
+   click **Create project**.
 2. **Add the pipeline file.** Open **Code → Repository**, click the **+** above the file
    list → **New file**, and name it exactly `.gitlab-ci.yml`: a leading dot and nothing
    before it, the one file name GitLab looks for (the example files in this directory
@@ -90,32 +75,33 @@ gitlab/.root_password`), and without the ACTIVATE client it is the way in.
    Its comments explain every line: one job, `tags: [shell]`, a few commands. **Commit
    changes**.
 3. **Watch it run.** Committing a `.gitlab-ci.yml` is all it takes: GitLab reads the file
-   after every commit to the repository and starts a pipeline from it (the file itself
-   can narrow that down with `rules:`, which these examples do not use). Open **Build →
+   after every commit to the repository and starts a pipeline from it — the default for
+   any repository that holds the file; step 5 shows how to limit it to a schedule or a
+   click. Open **Build →
    Pipelines**: one pipeline, started by your commit. Click its status badge, then the
    job `hello-login-node`. The log shows the runner taking the job
    (`Running with gitlab-runner ...`), the repository being fetched, your commands with
    their output, and `Job succeeded`.
 
-The first line of output, `Running on <login node> as <user>`, names the workflow's
-owner, not the GitLab account that committed: that is who every job runs as. The job
-ran in a fresh checkout of the repository under `~/gitlab/runner/builds/shell/`. Change a
-line, commit, and it runs again.
+The first line of output, `Running on <login node> as <user>`, names you, the runners'
+owner, whoever committed: that is who every job of your runners runs as. The job ran
+in a fresh checkout of the repository in your runner directory (*Where things are*,
+below). Change a line, commit, and it runs again. The web editor is enough for the
+tutorial; to clone the project to your laptop and push from there, see *Git from the
+command line* in the workflow's [README](../README.md).
 
-## Step 3: the same runner reaches every system, with `pw`
+## Step 2: the same runner reaches every system, with `pw`
 
-The shell runner runs on the login node as the workflow's owner, so it can use the `pw`
+The shell runner runs on the login node as you, so it can use the `pw`
 CLI the way you do from your laptop: `pw cluster ls`, `pw ssh <resource> <command>`,
 `pw workflows run ...`. A pipeline can therefore run a command on every system of your
 ACTIVATE account, or start a registered workflow on one of them.
 
 1. **The credential.** `pw` needs to be signed in on the login node after the workflow
-   run has completed, when the run's own credential has stopped working. On a cloud
-   cluster that is the **ACTIVATE API key** you gave the form in step 1: every job of
-   the shell runner gets it as `PW_API_KEY`. On a cluster connected through the ACTIVATE
-   agent, `pw` on the login node is signed in as you already. (A project can also carry
-   a key of its own as a masked, protected CI/CD variable named `PW_API_KEY`, under
-   **Settings → CI/CD → Variables**; it takes precedence.)
+   run has completed, when the run's own credential has stopped working. Give the
+   project one of your API keys: **Settings → CI/CD → Variables → Add variable**, key
+   `PW_API_KEY`, value an API key of yours (**Account → Authentication → API keys** in
+   ACTIVATE), *Masked* ticked; every job of the shell runner gets it.
 2. **Add the job.** Open **Build → Pipeline editor**, which shows `.gitlab-ci.yml` and
    checks it as you type, replace its contents with
    [`02-every-system.gitlab-ci.yml`](02-every-system.gitlab-ci.yml) and put the names of
@@ -140,10 +126,10 @@ that system and wait for it, `pw workflows run <workflow> -i '{...}'` to launch 
 registered workflow, an `rsync` of the project's files first; the job's log and
 artifacts land in GitLab as before.
 
-## Step 4: a job on a compute node, through the SLURM runner
+## Step 3: a job on a compute node, through the SLURM runner
 
-For the cluster GitLab runs on there is a shorter way than `pw ssh`: the SLURM runner
-turns a job into a batch job itself. Replace `.gitlab-ci.yml` with
+The SLURM runner submits to one system only: the SLURM cluster GitLab itself runs on,
+where it was registered. Replace `.gitlab-ci.yml` with
 [`03-hello-slurm.gitlab-ci.yml`](03-hello-slurm.gitlab-ci.yml) in the pipeline editor,
 put the `sbatch` options your cluster requires into `SCHEDULER_PARAMETERS`, and commit.
 Three things in the file are new:
@@ -152,7 +138,7 @@ Three things in the file are new:
 default:
   id_tokens:                    # every SLURM job needs this token: Jacamar uses it to talk to GitLab
     CI_JOB_JWT:
-      aud: $CI_SERVER_URL       # this GitLab's address, e.g. https://gitlab-jane.activate.pw
+      aud: $CI_SERVER_URL       # this GitLab's address, e.g. https://gitlab.activate.pw
 
 variables:
   SCHEDULER_PARAMETERS: "--nodes=1 --ntasks=4 --time=00:10:00"   # the sbatch options, as one string
@@ -179,7 +165,9 @@ A job reaches the scheduler with `tags: [slurm]`; its `sbatch` options go in
 3. The commands and their output, exactly as they ran on the compute node:
    `Running on <node> as <user>`, `SLURM job <id> on <node>`, then the node names
    `srun hostname` printed.
-4. `Slurm job ci-...: state: COMPLETED`: Jacamar asked SLURM how the batch job ended.
+4. `Slurm job ci-...: state: COMPLETED`: Jacamar asked SLURM's accounting (`sacct`)
+   how the batch job ended. This is why the runner needs accounting on the cluster;
+   the workflow refuses to register it where accounting is off.
 5. `Job succeeded`: GitLab marks the job green.
 
 **The same job, seen from the cluster.** The batch job was an ordinary one, submitted as
@@ -198,11 +186,11 @@ If the job is red, read the `sbatch` error in its log: an option the cluster req
 and did not get, or one it rejects, goes into `SCHEDULER_PARAMETERS`. Edit the file,
 commit, and the new pipeline tells you.
 
-## Step 5: compute on the cluster, report on the login node
+## Step 4: compute on the cluster, report on the login node
 
 Real work produces files. Replace `.gitlab-ci.yml` with
 [`04-simulate-and-report.gitlab-ci.yml`](04-simulate-and-report.gitlab-ci.yml), with the
-same `SCHEDULER_PARAMETERS` as in step 4, and commit. Its two stages:
+same `SCHEDULER_PARAMETERS` as in step 3, and commit. Its two stages:
 
 ```mermaid
 flowchart LR
@@ -225,7 +213,7 @@ Run it with another input: **Build → Pipelines → New pipeline**, add the var
 starts takes precedence over the file's `variables:`, which is how one pipeline serves
 many cases.
 
-## Step 6: let it run on its own
+## Step 5: let it run on its own
 
 - **At every change:** it already does. Any commit to the repository (the web editor, a
   `git push`) starts the pipeline.
@@ -234,7 +222,17 @@ many cases.
   and the branch, and **Create pipeline schedule**. The next runs appear under **Build →
   Pipelines** with a *scheduled* badge, each with its own artifacts.
 - **By hand:** **Build → Pipelines → New pipeline**, optionally with variables, as in
-  step 5.
+  step 4.
+
+A `workflow` block at the top of `.gitlab-ci.yml` stops commits from starting
+pipelines, leaving the schedule and the **New pipeline** button; `when: manual` on a
+single job holds just that job for a click:
+
+```yaml
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "schedule"'
+```
 
 A job's wall time counts against GitLab's job timeout too (one hour by default, under
 **Settings → CI/CD → General pipelines**), queue time included.
@@ -244,19 +242,21 @@ A job's wall time counts against GitLab's job timeout too (one hour by default, 
 | | |
 |---|---|
 | GitLab, the runners | the cluster's login node, started by the workflow; they stay up after the run completes, until the session is deleted |
-| A job's checkout on the cluster | shell runner: `~/gitlab/runner/builds/shell/<...>/<group>/<project>/`; SLURM runner: `~/gitlab/runner/jacamar/<you>/builds/<...>/<group>/<project>/`, on the shared home so the compute node sees it |
-| The batch job's output | streamed into the job's log in GitLab; the runners' own log is `~/gitlab/runner/runner.log` |
+| A job's checkout on the cluster | in your runner directory — `~/gitlab/runner/` when you launched the workflow, `~/gitlab-runner/` for added runners: `builds/shell/<...>/<group>/<project>/` (shell runner), `jacamar/<you>/builds/<...>/<group>/<project>/` (SLURM runner), on the shared home so the compute node sees it |
+| The batch job's output | streamed into the job's log in GitLab; the runners' own log is `runner.log` in the runner directory |
 | The job in SLURM | `squeue -u $USER` while it runs, `sacct` afterwards; its name starts with `ci-` |
 
 ## When a job does not run
 
 | What you see | Why | What to do |
 |---|---|---|
-| The job stays *pending*; "This job is stuck because of one of the following problems" | no runner has its tag | Check `tags:`; relaunch the workflow with **Register a SLURM runner** on |
+| The job stays *pending*; "This job is stuck because of one of the following problems" | no runner has its tag | Check `tags:`; register your runners again with **Register a SLURM runner** on |
 | `No id_token found on CI_JOB_JWT variable` | the `default: id_tokens:` block is missing | Copy it from the examples |
-| `sbatch: error: ...` in the log | an option the cluster rejects, or one it requires is missing (account, partition, QoS) | Try the same `sbatch` options by hand on the cluster, then put them in `SCHEDULER_PARAMETERS` (or `SBATCH_OPTIONS` in step 3) |
-| `pw: ... no context configured` or `Authentication has expired` in a step 3 job | the runner has no credential | Relaunch the workflow with an **ACTIVATE API key**, or set `PW_API_KEY` as a project variable |
-| A job does something you did not expect it to be allowed to | it runs as the workflow's owner, not as the GitLab user | Share the GitLab only with people you would hand your cluster account to |
+| `sbatch: error: ...` in the log | an option the cluster rejects, or one it requires is missing (account, partition, QoS) | Try the same `sbatch` options by hand on the cluster, then put them in `SCHEDULER_PARAMETERS` (or `SBATCH_OPTIONS` in step 2) |
+| A green SLURM job, but its artifacts never reach GitLab | Jacamar uploads them from the login node in a clean login shell, which must find `gitlab-runner`; the workflow links it into `~/bin`, and your login profile leaves `~/bin` off the PATH | The run's log warns about it; make your profile put `~/bin` on the PATH |
+| `pw: ... no context configured` or `Authentication has expired` in a step 2 job | the runner has no credential | Set `PW_API_KEY` as a masked CI/CD variable of the project (step 2) |
+| The job stays *pending* in a project your runners do not serve | runners only take jobs from the project or group they were registered for | Move it into your runners' group (Settings → General → Advanced → Transfer project), or add runners for it (the README's *Adding your runners to someone else's GitLab*) |
+| A job does something you did not expect it to be allowed to | it runs as you, the runners' owner, whoever pushed the commit | Let only people you would hand your cluster account to push to the group's projects; others run their own runners (the README's *Working on a project together*) |
 | The job runs for an hour and fails with a timeout | the node took too long or the script hangs | Shorter `--time`, a higher job timeout, check `squeue` |
 | `Running with gitlab-runner ...` then nothing for minutes | SLURM is booting or waiting for a node | `squeue -u $USER` on the cluster shows the job's state and reason |
 
@@ -269,8 +269,11 @@ A job's wall time counts against GitLab's job timeout too (one hour by default, 
   and `srun ./my_mpi_program` in the script.
 - **Keep results:** `artifacts:` for files GitLab should keep and show; a copy to a
   project directory on the cluster in the script for large data.
+- **Git from your laptop:** clone, edit and push with `git` through a tunnel to the
+  cluster, with an SSH key or a token: *Git from the command line* in the workflow's
+  [README](../README.md).
 - **PBS clusters:** Jacamar runs on PBS too (`qsub` options in `SCHEDULER_PARAMETERS`); the
   workflow registers the SLURM runner today. A PBS system is reached from a pipeline the
-  step 3 way, `pw ssh <system> 'qsub ...'`.
+  step 2 way, `pw ssh <system> 'qsub ...'`.
 - The full reference: [GitLab CI/CD YAML](https://docs.gitlab.com/ci/yaml/) and
   [Jacamar CI](https://ecp-ci.gitlab.io/docs/admin/jacamar/introduction.html).

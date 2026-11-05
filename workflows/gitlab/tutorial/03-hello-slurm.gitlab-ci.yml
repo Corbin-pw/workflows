@@ -8,7 +8,7 @@ default:
   id_tokens:
     CI_JOB_JWT:
       # The token's audience is this GitLab's address, for example
-      # https://gitlab-jane.activate.pw; $CI_SERVER_URL expands to it.
+      # https://gitlab.activate.pw; $CI_SERVER_URL expands to it.
       aud: $CI_SERVER_URL
 
 # "variables:" defines values every job can read as environment variables.

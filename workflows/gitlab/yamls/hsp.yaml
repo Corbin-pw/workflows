@@ -210,11 +210,11 @@ jobs:
               GitLab builds its clone URLs and the Sign in with ACTIVATE redirect URI from this address, so it is pinned instead of taking a random subdomain. Lowercase letters, digits and dashes; reserve it with 'pw subdomains reserve <label>' so nobody else takes it. Two GitLabs of yours (two clusters) need two labels.
           rundir:
             label: Run directory
-            description: Keeps the repositories, database and settings; reuse it to keep them, delete it to start over. A run directory belongs to one runtime.
+            description: Keeps the repositories, database and settings; reuse it to keep them, delete it to start over, put it on a persistent disk to keep them across cluster restarts. A run directory belongs to one runtime.
             type: string
             default: ${HOME}/gitlab
             tooltip: |
-              Holds config/ (gitlab.rb, secrets), data/ (repositories, PostgreSQL, uploads, and under .rootless/ what the package writes into its install directory), logs/ and runner/ (the CI runners' configuration and builds); under Singularity also work/ (the container's /tmp). Singularity writes everything as your user (rm -rf removes it); Docker writes config/, data/ and logs/ as root (sudo rm -rf). One GitLab per run directory at a time; the first start of a run directory takes several minutes (database setup).
+              Holds config/ (gitlab.rb, secrets), data/ (repositories, PostgreSQL, uploads, and under .rootless/ what the package writes into its install directory), logs/ and runner/ (the CI runners' configuration and builds); under Singularity also work/ (the container's /tmp). Singularity writes everything as your user (rm -rf removes it); Docker writes config/, data/ and logs/ as root (sudo rm -rf). One GitLab per run directory at a time; the first start of a run directory takes several minutes (database setup). On a cloud cluster, put it on a persistent disk attached to the cluster (/gitlab/gitlab for a disk mounted at /gitlab): the data then outlives a stop or re-creation of the cluster, and after a restart you delete the stopped session and launch again on the same directory.
           image:
             label: GitLab image
             description: Docker only; keep the major version of an existing run directory. gitlab/gitlab-ce is the open-source Community Edition, which takes no license.

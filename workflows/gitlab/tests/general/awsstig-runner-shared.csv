@@ -1,0 +1,3 @@
+date,phase,result,cleanup,workflow_tree,submitter_tree,tools_tree,commit,fetched,branch,user,run_slug,duration_s,error
+2026-11-04T15:57:57Z,cold,pass,kept,cdc9c4f,162207a,727fc42,a56a655-dirty,ecb9303,gitlab,alvaro,creative-frog,53,
+2026-11-04T16:05:10Z,warm,pass,ok,cdc9c4f,162207a,727fc42,a56a655-dirty,ecb9303,gitlab,alvaro,outgoing-hedgehog,53,

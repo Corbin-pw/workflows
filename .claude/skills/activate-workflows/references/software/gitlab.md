@@ -1,6 +1,6 @@
 # GitLab (Linux package image, as the user under Apptainer or as root in Docker) behind an endpoint, with CI runners
 
-What building `workflows/gitlab` taught (2026-10-28 to 11-02, GitLab 19.5.1-ee, gitlab-runner
+What building `workflows/gitlab` taught (2026-10-28 to 11-03, GitLab 19.5.1-ee, gitlab-runner
 19.5.1, Jacamar CI 0.31.0; Docker through `sudo` on a lab node and two cloud clusters,
 apptainer 1.5.5 on a standard cloud image, singularity-ce 4.5.1 on a STIG-hardened one,
 apptainer 1.5.3 on an HPCMP system with a Lustre home). The endpoint mechanics are [../activate-platform.md](../activate-platform.md)
@@ -26,9 +26,8 @@ start and stop the container and define `gitlab_exec`, `gitlab_alive` and `gitla
     [singularity-sif-containers.md](singularity-sif-containers.md), "An image that needs
     root, rebuilt to run as the user", whose worked example this workflow is. Every
     service runs as the user from a read-only image, so the run directory can sit on any
-    filesystem and the node needs no subuid range or writable layer; the `--fakeroot`
-    runtime it replaced (tag `19.5.1-ee`, 2026-10) is kept in that file's `--fakeroot`
-    section for what it taught. What is GitLab's own: the entrypoint
+    filesystem and the node needs no subuid range or writable layer. What is GitLab's
+    own: the entrypoint
     `/assets/init-rootless`; `rootless/gitlab.rb`, evaluated in place before
     `GITLAB_OMNIBUS_CONFIG`, names `git` as the account of every service and enables
     `gitlab_sshd`, which takes the form's port through `gitlab_sshd['listen_address']`;
@@ -122,15 +121,14 @@ start and stop the container and define `gitlab_exec`, `gitlab_alive` and `gitla
   database is created; a user-readable sign that it exists is `data/postgresql/data`
   (`data/postgresql` is `2775`).
 - **Runners through the API**: `POST /api/v4/user/runners` with `runner_type=
-  instance_type`, `tag_list`, `run_untagged` returns the `glrt-` token (201); keep it
-  (`POST /api/v4/runners/verify` with `token` says 200 while it is valid) and rewrite
-  `config.toml` on every start because the GitLab port changes with the endpoint. Set
-  `url` **and** `clone_url` to `http://127.0.0.1:<port>`: the job payload otherwise
-  tells the runner to clone from `external_url`, which the proxy blocks. The runner
-  runs as the user (`gitlab-runner run --config ... --working-directory ...`, "Running
-  in user-mode" is fine) under `setsid`, outside the endpoint's process tree, and
-  `cancel.sh` kills its session. A `POST /projects/:id/repository/commits` with
-  `.gitlab-ci.yml` starts the first pipeline at once.
+  group_type&group_id=N` (or `project_type&project_id=N`), `tag_list`, `run_untagged`
+  returns the `glrt-` token (201); keep it (`POST /api/v4/runners/verify` with `token`
+  says 200 while it is valid) and rewrite `config.toml` on every start because the
+  GitLab port changes with the endpoint. Set `url` **and** `clone_url` to
+  `http://127.0.0.1:<port>`: the job payload otherwise tells the runner to clone from
+  `external_url`, which the proxy blocks. The runner runs as the user (`gitlab-runner
+  run --config ... --working-directory ...`, "Running in user-mode" is fine) under
+  `setsid`, outside the endpoint's process tree, and `cancel.sh` kills its session.
 - **A success body can carry a secret** (the runner token): print `message` from an
   error body, never the body of a call that may have succeeded.
 - **The run must not complete before this setup is done.** The platform's probe of
@@ -172,53 +170,42 @@ start and stop the container and define `gitlab_exec`, `gitlab_alive` and `gitla
   the `sbatch` options (`--nodes=1 --time=00:10:00`); `-o`, `-e`, `-J` and `--wait`
   are Jacamar's. Only `before_script` + `script` run in the batch job (`sbatch
   --wait`, output tailed from `slurm-ci-<job>.out`); sources, artifacts and
-  `after_script` run on the runner's host. Jacamar can inject cluster-wide options
-  (`[batch] default_args = ["--account=x", ...]` in `jacamar.toml`); a form input feeding
-  it was dropped on review (2026-10-29): the options a cluster requires go into each
-  job's `SCHEDULER_PARAMETERS`, where the tutorial tells the reader to put them. An
-  example project the workflow created was dropped the same day; the tutorial creates
-  one by hand.
+  `after_script` run on the runner's host. The options a cluster requires (account,
+  partition, QoS) go into each job's `SCHEDULER_PARAMETERS`; the workflow sets no
+  cluster-wide `[batch] default_args` in `jacamar.toml`.
 - **A runner runs every job as the Linux user it runs as**, whichever GitLab account
-  pushed, so a runner shared between users runs their jobs as its owner. The workflow
-  therefore registers no instance runner (2026-11-03; the first version did, with the
-  owner's `PW_API_KEY` handed to the runner through a form input and an `env:` block,
-  both gone): the owner's runners are **group runners** of a private group the owner
-  owns (`POST /user/runners` with `runner_type=group_type&group_id=N`; the group from
-  `POST /groups`, the owner's account created ahead of its first OIDC sign-in with
-  `POST /users ... provider=openid_connect&extern_uid=<PW_USER>` and made Owner with
-  `POST /groups/:id/members access_level=50`, 409 then `PUT`), and every other user adds
-  runners of their own from the same workflow's **runner mode** on the same login node
-  (`lib/runner-start-template.sh`): project or group runners of a path of theirs,
-  registered with their personal access token (`api` + `create_runner`; `GET
-  /projects/:path` then `GET /groups/:path` resolves the id), started as them from
-  their own directory. A stored runner is kept only while `POST /runners/verify`
-  answers 200 *and* `GET /runners/:id` shows the scope this run wants
-  (`runner_type`, `groups[].id` or `projects[].id`); otherwise it is deleted and
-  registered again, which is how an instance runner of the first version goes away.
-  The runner always starts with `env -u PW_API_KEY`: a pipeline that calls `pw` sets
-  `PW_API_KEY` as a masked CI/CD variable (pw-auth.md).
-  Verified 2026-11-03 on a STIG login node with one account: group runners
-  registered, a pipeline of a project in the group ran on the added runners (shell job
-  without a key in its environment, SLURM job through Jacamar on a compute node, every
-  connection through the forwarder), a later start without a token kept the stored
-  runners, a cancel mid-flight left nothing. Not verified without a second account: a
-  non-owner's run key reading `/-/activate/host` through a shared session, and the
-  owner-account pre-creation at a first OIDC sign-in (the tests carry no OIDC client).
-- **Finding another user's GitLab on the login node, safely** (verified 2026-11-03 on a
-  STIG login node): the runner must use the loopback port (the proxy strips
-  `Authorization`), which every user of the node shares, so (1) the GitLab's nginx
-  snippet answers `GET /-/activate/host` with `{"port", "uid", "host"}` behind the
-  platform's sign-in, and the runner-mode run reads it through the public address with
-  its own `PW_API_KEY` (the session must be shared with that user; the proxy's routing
-  of the subdomain is what vouches for the answer); (2) `/proc/net/tcp` is world-readable
-  and names the uid of every socket, so `lib/runner-service.py listener-uid <port>`
-  checks who holds the port before anything is sent, and (3) the runner, Jacamar and
-  git reach GitLab through a forwarder of the run (`runner-service.py forward`) that
-  opens each connection to the port and relays it only once the accepted socket at the
-  other end (`local = port, remote = our ephemeral port` in `/proc/net/tcp`) belongs to
-  that uid or to root (docker-proxy); a process that takes the port over after GitLab
-  stops is refused before a byte is sent (a stolen runner token would hand the thief
-  every job's variables). The status page (`runner-service.py status`, the endpoint)
+  pushed, so the workflow never shares a runner between users. The owner's runners are
+  **group runners** of a private group the owner owns (`POST /user/runners` with
+  `runner_type=group_type&group_id=N`; the group from `POST /groups`; with OIDC the
+  owner's account is created ahead of its first sign-in, `POST /users ...
+  provider=openid_connect&extern_uid=<PW_USER>`, and made Owner, `POST
+  /groups/:id/members access_level=50`, `PUT` on 409). Every other user adds runners of
+  their own through the workflow's **runner mode** on the same login node
+  (`lib/runner-start-template.sh`): project or group runners of a full path of theirs
+  (`GET /projects/:path`, then `GET /groups/:path`), registered with their personal
+  access token (`api` + `create_runner`) and started as them from their own directory.
+  A stored runner is reused only while `POST /runners/verify` answers 200 *and* `GET
+  /runners/:id` shows the scope this run wants (`runner_type`, `groups[].id` or
+  `projects[].id`); otherwise it is deleted and registered again. The runner starts
+  with `env -u PW_API_KEY`; a pipeline that calls `pw` sets `PW_API_KEY` as a masked
+  CI/CD variable (pw-auth.md). Verified 2026-11-03 on a STIG login node (a pipeline of
+  the group ran on the added runners: a shell job and a SLURM job through Jacamar) and
+  by a second account on a shared cloud cluster of activate.hpc.mil (its runners
+  registered as it through the shared session).
+- **Finding another user's GitLab on the login node, safely** (verified 2026-11-03): the
+  runner must use the loopback port (the proxy strips `Authorization`), which every
+  user of the node shares, so (1) the GitLab's nginx snippet answers `GET
+  /-/activate/host` with `{"port", "uid", "host"}` behind the platform's sign-in, and
+  the runner-mode run reads it through the public address with its own `PW_API_KEY`
+  (the session must be shared with that user; the proxy's routing of the subdomain
+  vouches for the answer); (2) `/proc/net/tcp` is world-readable and names the uid of
+  every socket, so `lib/runner-service.py listener-uid <port>` checks who holds the
+  port before anything is sent; (3) the runner, Jacamar and git reach GitLab through a
+  forwarder of the run (`runner-service.py forward`) that opens each connection to the
+  port and relays it only once the accepted socket at the other end (`local = port,
+  remote = our ephemeral port` in `/proc/net/tcp`) belongs to that uid or to root
+  (docker-proxy); a process that takes the port over after GitLab stops is refused
+  before a byte is sent. The status page (`runner-service.py status`, the endpoint)
   shows the listener's state the same way. Python 3.6 is enough for it.
 - **`/proc/net/tcp` columns:** `sl local_address rem_address st ... uid ... inode`;
   addresses are little-endian hex (`0100007F:1F90` is 127.0.0.1:8080), state `0A` is
@@ -233,7 +220,7 @@ start and stop the container and define `gitlab_exec`, `gitlab_alive` and `gitla
   cache stages look `gitlab-runner` up by name, so a runner binary outside the login
   shell's PATH gives "Missing gitlab-runner. Uploading artifacts is disabled." (the job
   still succeeds, the artifacts never arrive, a `needs:` consumer finds nothing). A
-  symlink in `~/bin` (on the PATH of the default Rocky and Ubuntu profiles) fixed it;
+  symlink in `~/bin` (on the PATH of the default Rocky and Ubuntu profiles) is the fix;
   `user_bash_env = ["PATH=<dir>:$PATH"]` in `jacamar.toml` does not: the value goes to
   `env -i` as is, `$PATH` stays literal and the job dies with `bash: No such file or
   directory`. The launcher creates the link and probes a login shell for it.

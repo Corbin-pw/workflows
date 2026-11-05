@@ -5,7 +5,7 @@
 default:
   id_tokens:
     CI_JOB_JWT:
-      aud: $CI_SERVER_URL          # this GitLab's address, e.g. https://gitlab-jane.activate.pw
+      aud: $CI_SERVER_URL          # this GitLab's address, e.g. https://gitlab.activate.pw
 
 variables:
   # The SLURM job's sbatch options: replace them with what your cluster

@@ -82,8 +82,8 @@ text in the run's record (`pw workflows runs view`, verified 2026-10-27). A test
 passes it from an environment variable (`_test.secrets`, `tools/tests/README.md`): a
 key never sits in a test file or anywhere else in the repo.
 
-A key handed to a **service that other users drive** (a CI runner, a job queue) lets
-every one of them act as the key's owner: `workflows/gitlab` used to hand the owner's
-key to the CI runner and stopped (2026-11-03); the runner starts with `env -u
-PW_API_KEY`, each user runs runners of their own (the workflow's runner mode), and a
-pipeline that calls `pw` sets `PW_API_KEY` as a masked CI/CD variable of its project.
+A key is never handed to a **service that other users drive** (a CI runner, a job
+queue): every one of them could act as the key's owner. The service starts with `env
+-u PW_API_KEY`, each user runs workers of their own (`workflows/gitlab`'s runner mode),
+and a pipeline that calls `pw` sets `PW_API_KEY` as a masked CI/CD variable of its
+project.

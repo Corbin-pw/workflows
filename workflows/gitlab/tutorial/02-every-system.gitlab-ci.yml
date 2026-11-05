@@ -1,8 +1,8 @@
 # Step 3 of the tutorial: one job definition, run once per ACTIVATE resource.
 # The shell runner on the login node reaches the other systems with the pw
-# CLI, signed in with the ACTIVATE API key the workflow was launched with (or,
-# on a cluster connected through the ACTIVATE agent, the login node's own
-# sign-in). Like every job, it runs as the user who launched the workflow.
+# CLI, signed in with the PW_API_KEY variable of the project (or, on a cluster
+# connected through the ACTIVATE agent, the login node's own sign-in). Like
+# every job of your runners, it runs as you, whoever committed.
 
 hello-every-system:
   tags: [shell]                    # the shell runner: pw runs on the login node
