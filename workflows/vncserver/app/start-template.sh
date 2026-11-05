@@ -32,7 +32,6 @@ echo "mv cancel.sh cancel.sh.executed" >> cancel.sh
 for _cmd in vncserver vncpasswd Xvnc; do
     if ! command -v ${_cmd} >/dev/null 2>&1; then
         echo "::error title=Error::${_cmd} not found: this variant needs the emed compute image (kasmvncserver + GNOME). Was the job scheduled?"
-        pw workflows runs cancel ${PW_RUN_SLUG}
         exit 1
     fi
 done
@@ -86,8 +85,6 @@ vncserver ${DISPLAY} \
     -rfbport ${displayPort}
 if [ $? -ne 0 ]; then
     echo "::error title=Error::vncserver failed to start on display ${DISPLAY}"
-    # Fail loud: without this, wait_for_endpoint polls forever
-    pw workflows runs cancel ${PW_RUN_SLUG}
     exit 1
 fi
 
@@ -115,7 +112,6 @@ if [ -z "${web_up}" ]; then
     echo "--- Xvnc log ---"
     cat ${HOME}/.vnc/$(hostname)${DISPLAY}.log 2>/dev/null | tail -40
     bash cancel.sh || true
-    pw workflows runs cancel ${PW_RUN_SLUG}
     exit 1
 fi
 
@@ -152,13 +148,17 @@ echo "kill ${endpoint_pid} || true # pw endpoints https" >> cancel.sh
 while kill -0 ${endpoint_pid} 2>/dev/null && pgrep -f "Xvnc ${DISPLAY}( |$)" > /dev/null 2>&1; do
     sleep 15
 done
-echo "::warning::Endpoint client or desktop exited; tearing down"
+if kill -0 ${endpoint_pid} 2>/dev/null; then
+    echo "::error title=Error::Desktop Xvnc ${DISPLAY} exited; tearing down"
+else
+    echo "::error title=Error::Endpoint client for ${endpoint_name} exited; tearing down"
+fi
 # Run the cleanup here instead of relying on the workflow's exit trap, so the
 # desktop dies even if this template runs without the trap wrapper. Safe both
 # ways: cancel.sh moves itself aside on its first line.
 bash cancel.sh || true
 echo "::endgroup::"
-# No-op if the run already completed (endpoint was up); cancels it if the
-# desktop died before the endpoint ever registered.
-pw workflows runs cancel ${PW_RUN_SLUG} || true
+# Never cancel the run from here: a non-zero exit before the endpoint registered
+# fails the run through the submitter job's error step, and once the run has
+# completed nothing reads this status.
 exit 1
