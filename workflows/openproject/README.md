@@ -23,6 +23,11 @@ Both keep the database and attachments in the **Run directory** (`${HOME}/openpr
 so a later run on the same directory finds its projects and users again. A run
 directory belongs to one runtime: Docker writes it as root, Singularity as you.
 
+On a cluster that loses its home directory when it is restarted or re-provisioned, put
+the run directory on the persistent mount instead: projects, users and attachments then survive the restart.
+After the restart, delete the stale endpoint the dead service left behind and launch again with the same
+run directory.
+
 The first start of a run directory takes about two minutes (database setup); later
 starts under one.
 
