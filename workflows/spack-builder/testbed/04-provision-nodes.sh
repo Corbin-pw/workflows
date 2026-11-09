@@ -80,7 +80,7 @@ for c in "${COMPUTES[@]}"; do
   nexec "$c" "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq slurmd slurm-client >/dev/null" &
 done
 wait $(jobs -p)
-SLURM_VER="$(lxc exec "$CONTROLLER" -- sinfo --version | awk '{print $2}')"
+SLURM_VER="$(lxc exec "$CONTROLLER" -- dpkg-query -W -f="\${Version}" slurmctld)"
 ok "slurm ${SLURM_VER}"
 
 # ---------------------------------------------------------------------------
