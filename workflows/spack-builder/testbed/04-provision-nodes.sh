@@ -25,7 +25,7 @@ for n in "${ALL_NODES[@]}"; do
       apt-get install -y -qq $BASE_PKGS >/tmp/apt-base.log 2>&1 && echo '  [ OK ] $n base packages' \
       || { echo '  [FAIL] $n base packages'; tail -20 /tmp/apt-base.log; exit 1; }" ) &
 done
-wait
+wait $(jobs -p)
 
 # ---------------------------------------------------------------------------
 say "/etc/hosts"
@@ -79,7 +79,7 @@ nexec "$CONTROLLER" "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq slurm
 for c in "${COMPUTES[@]}"; do
   nexec "$c" "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq slurmd slurm-client >/dev/null" &
 done
-wait
+wait $(jobs -p)
 SLURM_VER="$(lxc exec "$CONTROLLER" -- sinfo --version | awk '{print $2}')"
 ok "slurm ${SLURM_VER}"
 
