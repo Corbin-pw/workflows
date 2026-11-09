@@ -46,6 +46,6 @@ for n in "${ALL_NODES[@]}"; do
 done
 
 say "Nodes"
-lxc list -c ns4tL
+lxc list -c ns4t
 ok "next: sudo ./04-provision-nodes.sh"
 echo "Log saved: $TB_LOG"
