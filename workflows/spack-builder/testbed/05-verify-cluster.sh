@@ -10,7 +10,7 @@ tb_start_log
 set +e   # survey script: keep going past failed probes and report them
 declare -a RESULTS
 check() { local name="$1"; shift; if out="$("$@" 2>&1)"; then RESULTS+=("PASS  $name"); ok "$name"; else RESULTS+=("FAIL  $name"); fail "$name"; echo "$out" | tail -5 | sed 's/^/        /'; fi; }
-asu() { local n="$1"; shift; lxc exec "$n" -- sudo -iu "$CLUSTER_USER" bash -lc "$*"; }
+asu() { local n="$1"; shift; lxc exec "$n" -- runuser -l "$CLUSTER_USER" -c "$*"; }
 
 say "Node facts"
 for n in "${ALL_NODES[@]}"; do
