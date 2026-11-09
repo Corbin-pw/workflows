@@ -4,7 +4,11 @@
 #
 # 1. In ACTIVATE, add an existing cluster and copy the agent install/start
 #    command it gives you (it contains a token -- treat it like a password).
-# 2. Save it as testbed/activate-agent.cmd   (git-ignored; never committed or logged)
+# 2. Save it as testbed/activate-agent.cmd   (git-ignored; never committed or logged).
+#    It runs as a bash script, so it can hold the pw CLI install too (README, "ACTIVATE agent"):
+#      export PATH="$HOME/pw:$HOME/.local/bin:$PATH"
+#      <pw CLI install command>
+#      <agent SERVICE install command>   -- service, so it survives node restarts
 # 3. Run:  sudo ./06-activate-agent.sh                 -> controller only (the login node)
 #          sudo ./06-activate-agent.sh tb-c1 tb-c2     -> specific nodes
 #          sudo ./06-activate-agent.sh --all           -> every node

@@ -44,6 +44,23 @@ check "all compute nodes idle"         bash -c "! lxc exec $CONTROLLER -- sinfo 
 check "srun on every compute node"     asu "$CONTROLLER" "srun -N${#COMPUTES[@]} -t 1 hostname | sort | tr '\n' ' '"
 check "sbatch round trip"              asu "$CONTROLLER" 'cd ~ && j=$(sbatch --parsable -t 1 --wrap "hostname > tb-sbatch.out") && for i in $(seq 30); do squeue -h -j $j | grep -q . || break; sleep 1; done; grep -q tb-c tb-sbatch.out && rm tb-sbatch.out'
 echo "  srun --mpi=list: $(lxc exec "$CONTROLLER" -- srun --mpi=list 2>&1 | tr '\n' ' ')"
+echo "  Slurm: $(lxc exec "$CONTROLLER" -- slurmctld -V 2>/dev/null) ($(lxc exec "$CONTROLLER" -- test -f /etc/slurm/.tb-source-build && echo source build || echo Ubuntu apt)), MpiDefault=$(lxc exec "$CONTROLLER" -- scontrol show config 2>/dev/null | awk '/^MpiDefault/{print $3}')"
+if [ "${SLURM_PMIX:-no}" = yes ]; then
+  check "Slurm has the PMIx plugin (srun --mpi=list)" bash -c "lxc exec $CONTROLLER -- srun --mpi=list 2>&1 | grep -q pmix"
+  check "srun --mpi=pmix starts one rank per node" asu "$CONTROLLER" "out=\$(srun -N${#COMPUTES[@]} --ntasks-per-node=1 --mpi=pmix -t 1 bash -c 'echo \$SLURMD_NODENAME:\$PMIX_RANK' | sort); echo \$out; [ \$(echo \$out | grep -o ':[0-9]' | wc -l) = ${#COMPUTES[@]} ]"
+  check "default srun is PMIx (MpiDefault)" asu "$CONTROLLER" "srun -N1 -t 1 bash -c 'test -n \"\$PMIX_RANK\"'"
+fi
+
+say "Development headers (what the workflow's header probe will see)"
+# Same roots as app/probe-headers.sh, so this predicts its HDR_* verdicts.
+for h in slurm/slurm.h slurm/pmi2.h pmix.h; do
+  p="$(lxc exec "${COMPUTES[0]}" -- bash -c "ls /usr/include/$h /usr/local/include/$h 2>/dev/null | head -1")"
+  if [ -n "$p" ]; then echo "  present  $h  $p"
+  else alt="$(lxc exec "${COMPUTES[0]}" -- bash -c "find /usr /opt -path '*/$h' 2>/dev/null | head -1")"; echo "  MISSING  $h${alt:+  (exists at $alt, outside the probe search roots)}"; fi
+done
+if [ "${SLURM_PMIX:-no}" = yes ]; then
+  check "Slurm headers on compute nodes (assumption A4)" lxc exec "${COMPUTES[0]}" -- test -f /usr/include/slurm/slurm.h -a -f /usr/include/slurm/pmi2.h
+fi
 
 say "GPUs"
 for i in "${!COMPUTES[@]}"; do
