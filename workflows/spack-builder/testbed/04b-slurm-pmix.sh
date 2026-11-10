@@ -102,7 +102,7 @@ for n in "${ALL_NODES[@]}"; do
       id slurm >/dev/null 2>&1 || useradd -r -u $SLURM_UID -g slurm -d /var/lib/slurm -s /usr/sbin/nologin slurm
       [ \"\$(id -u slurm)\" = $SLURM_UID ] || { usermod -u $SLURM_UID slurm; groupmod -g $SLURM_GID slurm; }"
     lxc file push "$ART" "$n/tmp/slurm-tb.tar.gz"
-    nexec "$n" "tar -C / --no-overwrite-dir -xzf /tmp/slurm-tb.tar.gz && rm /tmp/slurm-tb.tar.gz && ldconfig && echo '${SLURM_VERSION} pmix $(date -I)' > $TB_SLURM_MARKER"
+    nexec "$n" "tar -C / --no-overwrite-dir -xzf /tmp/slurm-tb.tar.gz && rm /tmp/slurm-tb.tar.gz && ldconfig && mkdir -p /etc/slurm && echo '${SLURM_VERSION} pmix $(date -I)' > $TB_SLURM_MARKER"
     miss="$(lxc exec "$n" -- bash -c 'ldd /usr/sbin/slurmd /usr/sbin/slurmctld /usr/lib/slurm/mpi_pmix*.so 2>/dev/null | grep "not found" | sort -u')"
     if [ -n "$miss" ]; then fail "$n: unresolved libraries:"; echo "$miss" | sed 's/^/      /'; FAILED=1
     else ok "$n: $(lxc exec "$n" -- /usr/sbin/slurmd -V) installed, libraries resolve"; fi
