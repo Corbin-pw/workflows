@@ -327,8 +327,12 @@ jobs:
       - name: Checkout workflow app
         uses: parallelworks/checkout
         with:
-          repo: https://github.com/parallelworks/workflows.git
-          branch: canary
+          # DEV (DarpaNodes-Improvements): fetch app/ from the fork branch under
+          # test, so runs exercise this branch's scripts rather than upstream's.
+          # REVERT to parallelworks/workflows + canary before opening the PR
+          # (DeveloperGuide.md: "restore it to canary before the PR merges").
+          repo: https://github.com/corbin-pw/workflows.git
+          branch: DarpaNodes-Improvements
           sparse_checkout:
             - workflows/spack-builder/app
             - tools/utils
