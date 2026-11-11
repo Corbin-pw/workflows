@@ -76,7 +76,7 @@ export PATH="$HOME/pw:$HOME/.local/bin:$PATH"   # so the agent line finds the CL
 
 Use the **service** install: the nodes restart whenever the VM is stopped, and a manually started agent would not come back. Check that the unit runs as `pwuser`, not root:
 `sudo lxc exec tb-ctl -- bash -c 'systemctl list-units --all | grep -iE "pw|agent"'`.
-The agent runs on `tb-ctl` only. It is the login node, and jobs reach the compute nodes through Slurm. Installed and connected 2026-11-09.
+It installs as a systemd **user** service of `pwuser` (seen in job environments: `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/5001/bus`), so 06 enables linger for `pwuser`. Without linger the service only runs while `pwuser` has a session and does not come back after a restart. The agent runs on `tb-ctl` only. It is the login node, and jobs reach the compute nodes through Slurm. Installed and connected 2026-11-09.
 
 ## Customer cluster assumptions
 

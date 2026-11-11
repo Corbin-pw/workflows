@@ -35,6 +35,10 @@ for n in "${TARGETS[@]}"; do
   if lxc exec "$n" -- sudo -iu "$CLUSTER_USER" bash -l /tmp/activate-agent.cmd; then ok "$n: agent command finished"
   else fail "$n: agent command exited non-zero (output above)"; fi
   lxc exec "$n" -- rm -f /tmp/activate-agent.cmd
+  # The agent installs as a systemd USER service of ${CLUSTER_USER}. Without
+  # linger, a user's services start only while they have a login session, so
+  # the agent would not come back after the node or VM restarts.
+  lxc exec "$n" -- loginctl enable-linger "$CLUSTER_USER" && ok "$n: linger enabled for ${CLUSTER_USER} (agent survives restarts)"
   lxc exec "$n" -- sudo -iu "$CLUSTER_USER" bash -lc 'command -v pw >/dev/null && { pw --version; pw auth whoami 2>&1 | head -2; } || ls ~/pw 2>/dev/null' | sed "s/^/  $n: /" || true
 done
 echo
