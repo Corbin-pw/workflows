@@ -39,6 +39,22 @@ for n in "${TARGETS[@]}"; do
   # linger, a user's services start only while they have a login session, so
   # the agent would not come back after the node or VM restarts.
   lxc exec "$n" -- loginctl enable-linger "$CLUSTER_USER" && ok "$n: linger enabled for ${CLUSTER_USER} (agent survives restarts)"
+  # /home is SHARED by every node, and the agent is a systemd USER unit under
+  # ~/.config/systemd/user. So whenever ${CLUSTER_USER} logs in on a compute
+  # node (ssh, including script_submitter's cleanup hop), systemd starts the
+  # agent THERE too; two agents then claim the same cluster and the platform
+  # drops the controller's connection -- runs die with executorExitedEarly
+  # (found 2026-11-13). Pin every pw agent unit to the node it was installed on.
+  lxc exec "$n" -- runuser -l "$CLUSTER_USER" -c '
+    for u in ~/.config/systemd/user/pw-agent*.service; do
+      [ -e "$u" ] || continue
+      d="$u.d"; mkdir -p "$d"
+      printf "[Unit]\n# /home is shared: without this the agent also starts on any node this user logs into.\nConditionHost=%s\n" "$(hostname)" > "$d/only-on-this-node.conf"
+      echo "  pinned $(basename "$u") to $(hostname)"
+    done
+    XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user daemon-reload' \
+    || warn "$n: could not pin the agent unit (see README, ACTIVATE agent)"
+  for c in "${ALL_NODES[@]}"; do [ "$c" = "$n" ] || lxc exec "$c" -- loginctl terminate-user "$CLUSTER_USER" 2>/dev/null || true; done
   lxc exec "$n" -- sudo -iu "$CLUSTER_USER" bash -lc 'command -v pw >/dev/null && { pw --version; pw auth whoami 2>&1 | head -2; } || ls ~/pw 2>/dev/null' | sed "s/^/  $n: /" || true
 done
 echo
