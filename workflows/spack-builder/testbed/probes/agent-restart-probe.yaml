@@ -1,0 +1,105 @@
+# agent-restart-probe.yaml -- isolates what makes the ACTIVATE agent restart on
+# the testbed (an `existing` cluster) about 45 s after a Slurm job ends.
+#
+# Seen 2026-11-13: during spack-builder runs the agent restarted after every
+# submitted Slurm job (detect, build, exec_check), and the third restart killed
+# the run (executorExitedEarly). activate-batch, whose script_submitter call is
+# identical except define_cleanup_script: false, did NOT restart the agent.
+# With the cleanup defined, script_submitter's Monitor cleanup runs
+#   ssh -o ServerAliveInterval=60 ... <compute node> timeout 300 ./cancel.sh
+# before the scancel -- the prime suspect.
+#
+# Modes (one per run; watch `journalctl -f` on tb-ctl for
+# "pw-agent-...: Scheduled restart job"):
+#   control  -- script_submitter, define_cleanup_script: false  (= activate-batch)
+#   cleanup  -- script_submitter, define_cleanup_script: true   (= spack-builder)
+#   ssh      -- no Slurm at all: one plain step that runs the same ssh hop
+permissions: ['*']
+
+jobs:
+  preprocessing:
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: Write probe script
+        run: |
+          set -e
+          cat > probe.sh <<'PROBE'
+          cat > cancel.sh <<'CANCEL'
+          #!/bin/bash
+          echo "[cancel] probe cleanup ran on $(hostname)"
+          CANCEL
+          chmod +x cancel.sh
+          echo "probe job on $(hostname) at $(date -u +%T)"
+          sleep 5
+          PROBE
+          echo "SCRIPT_PATH=${PWD}/probe.sh" | tee -a $OUTPUTS
+          echo "::notice::mode=${{ inputs.mode }} started $(date -u +%T)"
+
+  submit:
+    needs: [preprocessing]
+    if: ${{ inputs.mode != 'ssh' }}
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: Submit probe job
+        uses: github/parallelworks/workflows@canary
+        with:
+          $yaml: workflows/script_submitter/v3.6/general.yaml
+          resource: ${{ inputs.resource }}
+          shebang: '#!/bin/bash'
+          use_existing_script: true
+          script_path: ${{ needs.preprocessing.outputs.SCRIPT_PATH }}
+          define_cleanup_script: ${{ inputs.mode == 'cleanup' }}
+          cleanup_script_path: ./cancel.sh
+          scheduler: true
+          use_scheduler_agent: false
+          submit_and_exit: false
+          slurm:
+            is_enabled: true
+            partition: ${{ inputs.partition }}
+            time: '00:05:00'
+          pbs:
+            is_enabled: false
+      - name: Done
+        run: echo "::notice::mode=${{ inputs.mode }} submitter finished $(date -u +%T) -- check the journal for an agent restart in the last ~60 s"
+
+  bare_ssh:
+    needs: [preprocessing]
+    if: ${{ inputs.mode == 'ssh' }}
+    ssh:
+      remoteHost: ${{ inputs.resource.ip }}
+    steps:
+      - name: The cleanup's ssh hop, alone
+        run: |
+          set -x
+          date -u +%T
+          ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=5 -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null ${{ inputs.compute_node }} 'echo "hello from $(hostname)"' || true
+          date -u +%T
+          sleep 60
+          echo "::notice::ssh mode finished $(date -u +%T) -- check the journal for an agent restart"
+
+'on':
+  execute:
+    inputs:
+      resource:
+        type: compute-clusters
+        label: Compute cluster
+        include-workspace: false
+      mode:
+        type: dropdown
+        label: Probe mode
+        default: control
+        options:
+          - {label: 'control: script_submitter, no cleanup (like activate-batch)', value: control}
+          - {label: 'cleanup: script_submitter with cleanup script (like spack-builder)', value: cleanup}
+          - {label: 'ssh: only the cleanup ssh hop, no Slurm', value: ssh}
+      partition:
+        type: string
+        label: Slurm partition
+        default: compute
+      compute_node:
+        type: string
+        label: Compute node for the ssh mode
+        default: tb-c1
