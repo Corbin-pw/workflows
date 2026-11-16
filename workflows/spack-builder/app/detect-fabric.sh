@@ -107,23 +107,37 @@ probe_efa() {
 }
 
 probe_verbs() {
-  # Any verbs-capable device (Mellanox IB/RoCE on Azure HB/ND, Oracle cluster
-  # networks, GCP RoCE) exposes /sys/class/infiniband/<dev> with a uverbs char dev.
-  if [ -d /sys/class/infiniband ] && [ -n "$(ls -A /sys/class/infiniband 2>/dev/null)" ]; then
+  # A verbs-capable fabric (Mellanox IB/RoCE on Azure HB/ND, Oracle cluster
+  # networks, GCP RoCE) exposes /sys/class/infiniband/<dev>/ports/<n>. A DEVICE
+  # is not enough: ordinary Azure VMs with Accelerated Networking expose their
+  # SR-IOV Mellanox NIC (mlx5, link_layer Ethernet) there too, with no RDMA
+  # fabric behind it. Counting that device sent an NC-series T4 VM down the
+  # azure UCX-over-verbs profile (testbed run tb-spack-builder, 2026-11-13).
+  # So every port is logged, only ACTIVE ports count, and on Azure only
+  # InfiniBand ports do -- Azure's RDMA SKUs (HB/HC/HX/ND) are InfiniBand.
+  # The old `ibv_devinfo` fallback is gone: it reads the same devices from the
+  # same sysfs tree and would have counted the NIC all over again.
+  local d p name state ll found=1
+  [ -d /sys/class/infiniband ] || return 1
+  for d in /sys/class/infiniband/*; do
+    [ -e "$d" ] || continue
+    name="$(basename "$d")"
     # Exclude the pure-EFA case (efa has no traditional verbs QP semantics for UCX).
-    for d in /sys/class/infiniband/*; do
-      [ -e "$d" ] || continue
-      case "$(basename "$d")" in
-        efa*) continue ;;
-        *)    return 0 ;;
-      esac
+    case "$name" in efa*) continue ;; esac
+    for p in "$d"/ports/*; do
+      [ -e "$p" ] || continue
+      state="$(cat "$p/state" 2>/dev/null || true)"
+      ll="$(cat "$p/link_layer" 2>/dev/null || true)"
+      log "rdma device ${name} port $(basename "$p"): link_layer=${ll:-?} state=${state:-?}"
+      case "$state" in *ACTIVE*) ;; *) log "  ignored: port not ACTIVE"; continue ;; esac
+      if [ "${CLOUD:-unknown}" = "azure" ] && [ "$ll" != "InfiniBand" ]; then
+        log "  ignored: an Ethernet mlx5 port on Azure is Accelerated Networking (SR-IOV NIC), not an RDMA fabric"
+        continue
+      fi
+      found=0
     done
-  fi
-  # ibv_devinfo, if the rdma-core userspace is installed.
-  if command -v ibv_devinfo >/dev/null 2>&1 && ibv_devinfo >/dev/null 2>&1; then
-    return 0
-  fi
-  return 1
+  done
+  return $found
 }
 
 # GPU detection. Returns 0 if an NVIDIA GPU is present. Sets globals GPU_ARCH,

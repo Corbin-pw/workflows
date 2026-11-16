@@ -27,8 +27,16 @@ fabric:
   packages:
     ucx:
       variants: +rdmacm +verbs +rc +ud +dc +mlx5-dv +ib-hw-tm
+      # +thread_multiple is a REQUIREMENT, not a preference, for the same reason
+      # the MPI variants are (see the header): openmpi fabrics=ucx depends on
+      # ucx+thread_multiple, mpich netmod=ucx takes the default ~thread_multiple,
+      # so under unify:false the stack built TWO ucx@1.19.1 differing only in
+      # that variant -- and `module tcl refresh` then aborted with "Name clashes
+      # detected in module files" (ucx/1.19.1-gcc-14.2.0) after a fully
+      # successful install (testbed run tb-spack-builder, azure profile,
+      # 2026-11-16). One shared ucx, thread-safe, serves both MPIs.
       require:
-      - '@1.19.1'
+      - '@1.19.1 +thread_multiple'
     openmpi:
       require:
       - schedulers=slurm fabrics=ucx
