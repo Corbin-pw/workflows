@@ -272,6 +272,20 @@ fi
 
 log "selected fabric profile: $FABRIC_PROFILE"
 
+# Which MPI plugins this cluster's Slurm offers. MPICH's own PMI2 client does
+# not interoperate with current Slurm's pmi2 plugin: on Slurm 25.11 every rank
+# died in MPI_Init with "error: pmijobid missing in fullinit command" (testbed
+# 07-test-stack, 2026-11-16) -- the server requires a key MPICH 4.2 does not
+# send. Where Slurm has PMIx, build.sh builds MPICH with pmi=pmix instead, the
+# same PMIx path OpenMPI already launches through. Read here, on the worker,
+# because the build runs against what the compute nodes offer.
+SLURM_MPI_PMIX=0; SLURM_MPI_PLUGINS=""
+if command -v srun >/dev/null 2>&1; then
+  SLURM_MPI_PLUGINS="$(srun --mpi=list 2>&1 | awk '/^(srun: |[ \t]+)[a-z_0-9]+[ \t]*$/ {printf "%s ", $NF} /versions available/ {sub(/.*available: */, ""); printf "(%s) ", $0}' | sed 's/ *$//')"
+  printf '%s\n' "$SLURM_MPI_PLUGINS" | grep -qw pmix && SLURM_MPI_PMIX=1
+fi
+log "Slurm MPI plugins: ${SLURM_MPI_PLUGINS:-<srun not found>} -> PMIx $( [ "$SLURM_MPI_PMIX" = 1 ] && echo available || echo not available)"
+
 # Every value is QUOTED. This file is sourced, and until GPU_NAME arrived every
 # value it carried was a single token -- profiles, 0/1 flags, paths, targets --
 # so nothing needed quoting and nothing revealed that. The first multi-word value
@@ -300,6 +314,8 @@ DETECT_NPROC="$(nproc)"
 DETECT_CPUS_LOGICAL="$CPUS_LOGICAL"
 DETECT_CPUS_PHYSICAL="$CPUS_PHYSICAL"
 DETECT_CPUS_SLURM="$CPUS_SLURM"
+SLURM_MPI_PMIX="$SLURM_MPI_PMIX"
+SLURM_MPI_PLUGINS="$SLURM_MPI_PLUGINS"
 EOF
 log "wrote $OUT"
 

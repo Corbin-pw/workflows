@@ -207,6 +207,19 @@ GCC_SPEC="$(printf '%s\n' "$RENDER_OUT" | sed -n 's/^GCC_SPEC=//p')"
 [ -n "$GCC_SPEC" ] || { echo "::error title=Error::render-env.py did not report a stack compiler" >&2; exit 1; }
 log "Stack compiler (from spack.yaml): $GCC_SPEC"
 
+# MPICH's PMI. Every fabric fragment asks for pmi=pmi2, which suits clusters
+# whose Slurm only offers pmi2. Where Slurm offers PMIx (detect-fabric.sh), use
+# it: MPICH's own PMI2 client fails against current Slurm's pmi2 plugin
+# ("pmijobid missing in fullinit command"), while PMIx lets plain srun launch
+# MPICH exactly as it launches OpenMPI. Rewritten in the rendered file so the
+# fragments stay the single source for every other MPICH setting.
+if [ "${SLURM_MPI_PMIX:-0}" = "1" ] && grep -q 'pmi=pmi2' "$ENV_DIR/spack.yaml"; then
+  sed -i 's/pmi=pmi2/pmi=pmix/g' "$ENV_DIR/spack.yaml"
+  log "MPICH: pmi=pmix (this cluster's Slurm offers PMIx: ${SLURM_MPI_PLUGINS:-?}); launch it with srun --mpi=pmix"
+else
+  log "MPICH: pmi=pmi2 (no PMIx in this cluster's Slurm${SLURM_MPI_PLUGINS:+: $SLURM_MPI_PLUGINS})"
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Build the stack compiler with the system compiler, then register it.
 #    This must happen OUTSIDE the environment: the environment requires this
