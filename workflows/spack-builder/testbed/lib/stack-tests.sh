@@ -24,7 +24,22 @@ N1="${TB_NODES_PER_JOB:-2}"; PPN=2
 declare -a R
 say()  { printf '\n=== %s ===\n' "$*"; }
 check() { local n="$1"; shift; local out; if out="$("$@" 2>&1)"; then R+=("PASS  $n"); echo "  [ OK ] $n"; else R+=("FAIL  $n"); echo "  [FAIL] $n"; fi; printf '%s\n' "$out" | tail -8 | sed 's/^/         /'; }
-modname() { module -t avail "$1" 2>&1 | grep -E "^$1/" | grep -E "${2:-.}" | head -1; }
+# Lmod's terse listing prints a "name/" directory line before the versions.
+modname() { module -t avail "$1" 2>&1 | grep -E "^$1/." | grep -E "${2:-.}" | head -1; }
+# Unloading a module must leave the shell usable. Modules generated from vendor
+# environment scripts (intel-oneapi-*) can SET PATH rather than prepend to it,
+# and unloading them then removes PATH altogether -- every later command fails.
+# Report that as its own failure and restore the base environment.
+BASE_PATH="$PATH"; BASE_LD="${LD_LIBRARY_PATH:-}"
+LOADED=""
+clean_env() {  # unload everything; blame $LOADED if PATH does not survive
+  module purge >/dev/null 2>&1
+  if [ "$PATH" != "$BASE_PATH" ] && ! PATH="$PATH" command -v grep >/dev/null 2>&1; then
+    R+=("FAIL  ${LOADED:-?}: unloading it wipes PATH (modulefile sets PATH instead of prepending)")
+    echo "  [FAIL] ${LOADED:-?}: unloading it wipes PATH"
+  fi
+  export PATH="$BASE_PATH" LD_LIBRARY_PATH="$BASE_LD"; LOADED=""
+}
 
 say "Stack under test"
 echo "  run dir    : $RUN"
@@ -71,7 +86,7 @@ for M in openmpi mpich intel-oneapi-mpi; do
   MOD="$(modname "$M")"
   check "$M: module present (${MOD:-none})" test -n "$MOD"
   [ -n "$MOD" ] || continue
-  module purge; module load "$GCC_MOD" "$MOD"
+  clean_env; module load "$GCC_MOD" "$MOD"; LOADED="$MOD"
   check "$M: mpicc compiles with gcc 14" bash -c "mpicc --version 2>&1 | head -1 | grep -q ' 14\.' && mpicc -o hello_$M hello.c"
   launchers="$M"; [ "$M" = openmpi ] && launchers="openmpi openmpi-mpirun"
   for L in $launchers; do
@@ -88,7 +103,7 @@ done
 say "GROMACS: a 12k-atom water box, 2000 steps, per MPI"
 GMX_OMPI="$(modname gromacs openmpi)"
 if [ -n "$GMX_OMPI" ]; then
-  module purge; module load "$GMX_OMPI"
+  clean_env; module load "$GMX_OMPI"; LOADED="$GMX_OMPI"
   printf '#include "oplsaa.ff/forcefield.itp"\n#include "oplsaa.ff/spc.itp"\n\n[ system ]\nwater\n\n[ molecules ]\n' > topol.top
   cat > md.mdp <<'MDP'
 integrator = md
@@ -113,10 +128,11 @@ fi
 for M in openmpi mpich intel-oneapi-mpi; do
   GMX="$(modname gromacs "$M")"
   [ -n "$GMX" ] || { R+=("FAIL  gromacs/$M: no module"); continue; }
-  module purge; module load "$GMX"
+  clean_env; module load "$GMX"; LOADED="$GMX"
   check "gromacs/$M: mdrun ${N1} nodes x ${PPN} ranks x 2 threads" bash -c "$(declare -f launch); [ -s md.tpr ] && launch $M $N1 $PPN env OMP_NUM_THREADS=2 gmx_mpi mdrun -s md.tpr -deffnm md_$M -ntomp 2 > mdrun_$M.out 2>&1; tail -3 mdrun_$M.out; grep -E 'Performance:' md_$M.log"
 done
 
+clean_env
 say "What a batch job sees (for the MODULEPATH-at-login goal)"
 sbatch --wait -N1 -t 2 -o batchenv.out --wrap 'type module >/dev/null 2>&1 && echo "module: available" || echo "module: NOT available"; echo "MODULEPATH=${MODULEPATH:-<unset>}"; echo "BASH_ENV=${BASH_ENV:-<unset>}"' >/dev/null 2>&1
 sed 's/^/  /' batchenv.out 2>/dev/null
