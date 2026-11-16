@@ -64,18 +64,22 @@ ranks_ok() { local f="$1" want=$(( N1 * PPN )); [ "$(grep -c '^rank ' "$f")" = "
 
 # Launchers, one per MPI, as users are told to use them on this cluster:
 #   openmpi          srun (MpiDefault=pmix), plus mpirun inside an allocation
-#   mpich (pmi2)     srun --mpi=pmi2
+#   mpich            srun --mpi=pmix or --mpi=pmi2, whichever PMI it was built with
 #   intel-oneapi-mpi mpirun inside an allocation (hydra bootstraps through Slurm)
 launch() {  # launch MPI NODES NTASKS_PER_NODE cmd...
   local m="$1" n="$2" p="$3"; shift 3
   case "$m" in
     openmpi)          srun -N"$n" --ntasks-per-node="$p" -t 5 "$@" ;;
     openmpi-mpirun)   salloc -N"$n" --ntasks-per-node="$p" -t 5 mpirun -n $((n*p)) "$@" ;;
-    mpich)            srun -N"$n" --ntasks-per-node="$p" --mpi=pmi2 -t 5 "$@" ;;
+    mpich)            srun -N"$n" --ntasks-per-node="$p" --mpi="$MPICH_PMI" -t 5 "$@" ;;
     intel-oneapi-mpi) FI_PROVIDER=tcp I_MPI_FABRICS=shm:ofi salloc -N"$n" --ntasks-per-node="$p" -t 5 mpirun -n $((n*p)) "$@" ;;
   esac
 }
 
+# build.sh builds MPICH with pmi=pmix where Slurm offers PMIx, pmi=pmi2 otherwise.
+MPICH_PMI=pmi2; grep -q 'pmi=pmix' "$ENV_DIR/spack.yaml" 2>/dev/null && MPICH_PMI=pmix
+export MPICH_PMI
+echo "  MPICH PMI  : $MPICH_PMI (from $ENV_DIR/spack.yaml)"
 GCC_MOD="$(modname gcc)"
 say "Compiler module"
 check "gcc module present (${GCC_MOD:-none})" test -n "$GCC_MOD"
