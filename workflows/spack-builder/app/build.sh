@@ -72,6 +72,21 @@ if [ "$BUILD_ON" = "compute" ] && [ "$JOBS" -gt "$(nproc)" ]; then
 fi
 
 # shellcheck disable=SC1091
+# Search paths with duplicate entries corrupt vendor modulefiles. Spack writes
+# the intel-oneapi-* modules by sourcing the vendor's vars.sh and recording what
+# changed; with /home/<user>/pw on BOTH ends of PATH (inputs.sh prepends it to a
+# PATH the platform already ends with) it recorded the ENTIRE build PATH as
+# added -- `append-path PATH {/usr/bin}`, `{/bin}`, `{/home/pwuser/pw}` ... --
+# so `module unload intel-oneapi-mpi` stripped /usr/bin and /bin from the
+# user's shell (testbed 07-test-stack, 2026-11-16). De-duplicate first, keep
+# the order, and remember what the build environment contained for the scrub
+# after `module refresh` below.
+dedup_path() { local IFS=: out="" seen=":" d; for d in $1; do [ -n "$d" ] || continue; case "$seen" in *":$d:"*) continue ;; esac; seen="$seen$d:"; out="${out:+$out:}$d"; done; printf '%s' "$out"; }
+export PATH="$(dedup_path "$PATH")"
+[ -n "${LD_LIBRARY_PATH:-}" ] && export LD_LIBRARY_PATH="$(dedup_path "$LD_LIBRARY_PATH")"
+[ -n "${MANPATH:-}" ] && export MANPATH="$(dedup_path "$MANPATH")"
+BUILD_ENV_PATH="$PATH"; BUILD_ENV_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"; BUILD_ENV_MANPATH="${MANPATH:-}"
+
 . "$SPACK_ROOT/share/spack/setup-env.sh"
 log "Spack $(spack --version) at $SPACK_ROOT, -j${JOBS}"
 log "Build host: $(hostname) (${BUILD_ON} node, $(nproc) CPUs available, $(spack arch -t 2>/dev/null || echo '?'))"
@@ -422,6 +437,43 @@ spack -e "$ENV_DIR" config add "modules:default:tcl:exclude:[${MODULE_EXCLUDES}]
 # modules from run moral-silkworm were gone after run powerful-jaguar). Refresh
 # without it and each stack's modules persist alongside the others.
 spack -e "$ENV_DIR" module tcl refresh -y
+
+# Second line of defence against leaked search paths (see dedup_path above):
+# no modulefile may add or remove a directory that merely came from THIS
+# build's environment -- system dirs, the user's ~/pw -- unless it lies inside
+# the Spack root. Unloading such a module would take /usr/bin out of the
+# user's PATH, and a module written by one user's build must not carry that
+# user's home into everyone else's shell. Logged per file, never silent.
+scrub_leaked_paths() {
+  local var="$1" value="$2" e esc files f n total=0
+  local IFS=:
+  for e in $value; do
+    [ -n "$e" ] || continue
+    case "$e" in "$SPACK_ROOT"/*) continue ;; esac
+    esc="$(printf '%s' "$e" | sed 's/[][\\.*^$/+?(){}|]/\\&/g')"
+    files="$(grep -rlE "^(append|prepend|remove)-path( -d [{]:[}])? ${var} [{]${esc}[}]$" "$MODULE_ROOT" 2>/dev/null || true)"
+    [ -n "$files" ] || continue
+    IFS=$'\n'
+    for f in $files; do
+      n="$(grep -cE "^(append|prepend|remove)-path( -d [{]:[}])? ${var} [{]${esc}[}]$" "$f")"
+      sed -i -E "/^(append|prepend|remove)-path( -d [{]:[}])? ${var} [{]${esc}[}]$/d" "$f"
+      echo "  removed ${n} leaked ${var} entr$( [ "$n" = 1 ] && echo y || echo ies) for ${e} from ${f#$MODULE_ROOT/}"
+      total=$((total + n))
+    done
+    IFS=:
+  done
+  return 0
+}
+log "Scrubbing build-environment search paths that leaked into modulefiles"
+leaked="$( { scrub_leaked_paths PATH "$BUILD_ENV_PATH"
+             scrub_leaked_paths LD_LIBRARY_PATH "$BUILD_ENV_LD_LIBRARY_PATH"
+             scrub_leaked_paths MANPATH "$BUILD_ENV_MANPATH"; } )"
+if [ -n "$leaked" ]; then
+  printf '%s\n' "$leaked"
+  echo "::warning::Removed $(printf '%s\n' "$leaked" | wc -l) leaked search-path lines from generated modulefiles (vendor env scripts, usually intel-oneapi-*); see the list above"
+else
+  echo "  none found"
+fi
 
 # `spack arch` reports the LOGIN node, but the modules are written under the
 # spec's architecture -- and on a cross-architecture cluster, which is the case
