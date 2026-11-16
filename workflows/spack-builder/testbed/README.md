@@ -46,6 +46,7 @@ sudo ./00-preflight.sh
 | 4b | `sudo ./04b-slurm-pmix.sh` | Builds Slurm `SLURM_VERSION` from source with PMIx on `tb-ctl` (~10 min), swaps it in for the apt Slurm on every node, sets `MpiDefault=pmix` | `srun --mpi=list` includes `pmix` |
 | 5 | `sudo ./05-verify-cluster.sh` | Munge, shared FS, ssh, srun/sbatch, PMIx launch, headers, GPU through `--gres`, userns for Apptainer | `all N checks passed` |
 | 6 | `sudo ./06-activate-agent.sh` | Runs `activate-agent.cmd` as `pwuser` on the controller: pw CLI install + agent **service** install (see below) | Cluster shows connected in ACTIVATE |
+| 7 | `sudo ./07-test-stack.sh [RUN_DIR]` | After a successful full spack-builder build: modules, compile with each MPI, hello across both compute nodes per MPI and launcher (OpenMPI `srun` with PMIx and `mpirun`, MPICH `srun --mpi=pmi2`, Intel MPI `mpirun`), OSU latency/bandwidth between nodes, a 12k-atom GROMACS water run per MPI, and what a batch job's environment contains (~10 min) | `0 of N failed` |
 | — | `sudo ./99-destroy.sh [--purge]` | Removes nodes (keeps `/srv` data), or everything | |
 
 Every step can be re-run safely. `03 --recreate` rebuilds the nodes and keeps `/software` and `/home`.
