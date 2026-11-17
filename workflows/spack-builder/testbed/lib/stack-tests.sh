@@ -60,7 +60,13 @@ int main(int c, char **v) {
 }
 C
 # Two ranks per node on N1 nodes, ranks spread over both nodes.
-ranks_ok() { local f="$1" want=$(( N1 * PPN )); [ "$(grep -c '^rank ' "$f")" = "$want" ] && [ "$(grep '^rank ' "$f" | awk '{print $NF}' | sort -u | wc -l)" = "$N1" ]; }
+# A launch that did not wire the ranks together still prints N lines -- each
+# rank a singleton saying "rank 0 of 1" -- so the world size is checked too.
+ranks_ok() { local f="$1" want=$(( N1 * PPN ));
+  [ "$(grep -c "^rank [0-9]* of ${want} on " "$f")" = "$want" ] \
+  && [ "$(grep '^rank ' "$f" | awk '{print $2}' | sort -un | wc -l)" = "$want" ] \
+  && [ "$(grep '^rank ' "$f" | awk '{print $NF}' | sort -u | wc -l)" = "$N1" ] \
+  || { echo "expected ranks 0..$((want-1)) 'of ${want}' on ${N1} nodes"; return 1; }; }
 
 # Launchers, one per MPI, as users are told to use them on this cluster:
 #   openmpi          srun (MpiDefault=pmix), plus mpirun inside an allocation
@@ -69,9 +75,9 @@ ranks_ok() { local f="$1" want=$(( N1 * PPN )); [ "$(grep -c '^rank ' "$f")" = "
 launch() {  # launch MPI NODES NTASKS_PER_NODE cmd...
   local m="$1" n="$2" p="$3"; shift 3
   case "$m" in
-    openmpi)          srun -N"$n" --ntasks-per-node="$p" -t 5 "$@" ;;
+    openmpi)          srun -N"$n" --ntasks-per-node="$p" -c "${CPT:-1}" -t 5 "$@" ;;
     openmpi-mpirun)   salloc -N"$n" --ntasks-per-node="$p" -t 5 mpirun -n $((n*p)) "$@" ;;
-    mpich)            srun -N"$n" --ntasks-per-node="$p" --mpi="$MPICH_PMI" -t 5 "$@" ;;
+    mpich)            srun -N"$n" --ntasks-per-node="$p" -c "${CPT:-1}" --mpi="$MPICH_PMI" -t 5 "$@" ;;
     intel-oneapi-mpi) FI_PROVIDER=tcp I_MPI_FABRICS=shm:ofi salloc -N"$n" --ntasks-per-node="$p" -t 5 mpirun -n $((n*p)) "$@" ;;
   esac
 }
@@ -104,11 +110,23 @@ for M in openmpi mpich intel-oneapi-mpi; do
   else R+=("FAIL  $M: no osu-micro-benchmarks in the environment"); fi
 done
 
-say "GROMACS: a 12k-atom water box, 2000 steps, per MPI"
+say "GROMACS: a ~17k-atom water box, minimised, then 2000 MD steps per MPI"
 GMX_OMPI="$(modname gromacs openmpi)"
 if [ -n "$GMX_OMPI" ]; then
   clean_env; module load "$GMX_OMPI"; LOADED="$GMX_OMPI"
   printf '#include "oplsaa.ff/forcefield.itp"\n#include "oplsaa.ff/spc.itp"\n\n[ system ]\nwater\n\n[ molecules ]\n' > topol.top
+  # Energy minimisation first: solvate tiles the 1.86 nm spc216 box, and even
+  # an exact multiple (3 x 1.86 = 5.58 nm) leaves contacts at the seams that
+  # blow up MD at step ~4 ("water molecules can not be settled") without it.
+  cat > em.mdp <<'MDP'
+integrator = steep
+nsteps = 500
+emtol = 1000
+cutoff-scheme = Verlet
+coulombtype = PME
+rcoulomb = 1.0
+rvdw = 1.0
+MDP
   cat > md.mdp <<'MDP'
 integrator = md
 dt = 0.002
@@ -127,13 +145,18 @@ gen_temp = 300
 nstlog = 500
 nstenergy = 500
 MDP
-  check "gromacs: build the input (solvate + grompp)" bash -c "srun -n1 -t 5 gmx_mpi solvate -cs spc216.gro -box 5 5 5 -o water.gro -p topol.top && srun -n1 -t 5 gmx_mpi grompp -f md.mdp -c water.gro -p topol.top -o md.tpr -maxwarn 1 && test -s md.tpr"
+  check "gromacs: build the input (solvate, minimise, grompp)" bash -c "set -e
+    srun -n1 -t 5 gmx_mpi solvate -cs spc216.gro -box 5.58 5.58 5.58 -o water.gro -p topol.top
+    srun -n1 -t 5 gmx_mpi grompp -f em.mdp -c water.gro -p topol.top -o em.tpr -maxwarn 1
+    srun -n1 -c 4 -t 10 gmx_mpi mdrun -s em.tpr -deffnm em -ntomp 4
+    srun -n1 -t 5 gmx_mpi grompp -f md.mdp -c em.gro -p topol.top -o md.tpr -maxwarn 1
+    test -s md.tpr"
 fi
 for M in openmpi mpich intel-oneapi-mpi; do
   GMX="$(modname gromacs "$M")"
   [ -n "$GMX" ] || { R+=("FAIL  gromacs/$M: no module"); continue; }
   clean_env; module load "$GMX"; LOADED="$GMX"
-  check "gromacs/$M: mdrun ${N1} nodes x ${PPN} ranks x 2 threads" bash -c "$(declare -f launch); [ -s md.tpr ] && launch $M $N1 $PPN env OMP_NUM_THREADS=2 gmx_mpi mdrun -s md.tpr -deffnm md_$M -ntomp 2 > mdrun_$M.out 2>&1; tail -3 mdrun_$M.out; grep -E 'Performance:' md_$M.log"
+  check "gromacs/$M: mdrun ${N1} nodes x ${PPN} ranks x 2 threads" bash -c "$(declare -f launch); export CPT=2; [ -s md.tpr ] && launch $M $N1 $PPN env OMP_NUM_THREADS=2 gmx_mpi mdrun -s md.tpr -deffnm md_$M -ntomp 2 > mdrun_$M.out 2>&1; tail -3 mdrun_$M.out; grep -E 'Performance:' md_$M.log"
 done
 
 clean_env
