@@ -230,7 +230,16 @@ log "Stack compiler (from spack.yaml): $GCC_SPEC"
 # fragments stay the single source for every other MPICH setting.
 if [ "${SLURM_MPI_PMIX:-0}" = "1" ] && grep -q 'pmi=pmi2' "$ENV_DIR/spack.yaml"; then
   sed -i 's/pmi=pmi2/pmi=pmix/g' "$ENV_DIR/spack.yaml"
-  log "MPICH: pmi=pmix (this cluster's Slurm offers PMIx: ${SLURM_MPI_PLUGINS:-?}); launch it with srun --mpi=pmix"
+  # ...and say so at run time. MPICH 4.2 picks its PMI when a program starts
+  # (MPIR_CVAR_PMI_VERSION). Left unset it looks for the PMI-1 variables a
+  # launcher would export, finds none under srun --mpi=pmix, and runs every
+  # rank as a silent singleton ("rank 0 of 1" on each node; OSU then refuses
+  # to run). Setting it to x selects PMIx, and every rank joins one job
+  # (testbed 07-test-stack, 2026-11-17). Set in MPICH's modulefile, which the
+  # gromacs and osu modules for MPICH autoload, so users get it by loading
+  # the module. Module settings do not change any spec hash.
+  spack -e "$ENV_DIR" config add 'modules:default:tcl:mpich:environment:set:MPIR_CVAR_PMI_VERSION:x'
+  log "MPICH: pmi=pmix (this cluster's Slurm offers PMIx: ${SLURM_MPI_PLUGINS:-?}); its module sets MPIR_CVAR_PMI_VERSION=x; launch with srun (--mpi=pmix)"
 else
   log "MPICH: pmi=pmi2 (no PMIx in this cluster's Slurm${SLURM_MPI_PLUGINS:+: $SLURM_MPI_PLUGINS})"
 fi
