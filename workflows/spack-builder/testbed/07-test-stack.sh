@@ -11,8 +11,20 @@ TB_LIB="$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
 need_root
 tb_start_log
 set +e
-lxc file push "${TB_DIR}/lib/stack-tests.sh" "$CONTROLLER/tmp/stack-tests.sh" --uid "$CLUSTER_UID" --gid "$CLUSTER_GID" --mode 0755
-lxc exec "$CONTROLLER" -- runuser -l "$CLUSTER_USER" -c "bash /tmp/stack-tests.sh ${1:-}"
+# Streamed through stdin rather than `lxc file push`: the snap's file push read
+# the script through /var/lib/snapd/hostfs and was refused ("Error: Forbidden"),
+# and this script then ran the copy left by the previous run without saying so.
+# A fresh name per run makes a stale copy impossible; a failed copy is fatal.
+REMOTE="/tmp/stack-tests-$(date +%s).sh"
+if ! lxc exec "$CONTROLLER" -- sh -c "cat > $REMOTE && chown ${CLUSTER_UID}:${CLUSTER_GID} $REMOTE && chmod 0755 $REMOTE" < "${TB_DIR}/lib/stack-tests.sh"; then
+  die "could not copy lib/stack-tests.sh into ${CONTROLLER}"
+fi
+want="$(sha256sum < "${TB_DIR}/lib/stack-tests.sh" | cut -c1-16)"
+got="$(lxc exec "$CONTROLLER" -- sh -c "sha256sum < $REMOTE" | cut -c1-16)"
+[ "$want" = "$got" ] || die "copy of lib/stack-tests.sh in ${CONTROLLER} does not match (${got} vs ${want})"
+ok "test script copied to ${CONTROLLER}:${REMOTE} (sha256 ${want})"
+lxc exec "$CONTROLLER" -- runuser -l "$CLUSTER_USER" -c "bash $REMOTE ${1:-}"
 rc=$?
+lxc exec "$CONTROLLER" -- rm -f "$REMOTE"
 echo "Log saved: $TB_LOG"
 exit $rc

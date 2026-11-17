@@ -161,8 +161,19 @@ done
 
 clean_env
 say "What a batch job sees (for the MODULEPATH-at-login goal)"
-sbatch --wait -N1 -t 2 -o batchenv.out --wrap 'type module >/dev/null 2>&1 && echo "module: available" || echo "module: NOT available"; echo "MODULEPATH=${MODULEPATH:-<unset>}"; echo "BASH_ENV=${BASH_ENV:-<unset>}"' >/dev/null 2>&1
-sed 's/^/  /' batchenv.out 2>/dev/null
+# Two shells, because they differ: `sbatch --wrap` runs /bin/sh (dash on
+# Ubuntu), which ignores BASH_ENV, while a #!/bin/bash batch script sources it
+# and so gets Lmod's `module`. The submitting shell's MODULEPATH is exported
+# into the job by default either way.
+for sh in /bin/sh /bin/bash; do
+  printf '#!%s\n#SBATCH -N1 -t 2 -o batchenv-%s.out\n' "$sh" "$(basename $sh)" > "batchenv-$(basename $sh).sbatch"
+  cat >> "batchenv-$(basename $sh).sbatch" <<'JOB'
+if command -v module >/dev/null 2>&1 || type module >/dev/null 2>&1; then echo "module: available"; else echo "module: NOT available"; fi
+echo "MODULEPATH=${MODULEPATH:-<unset>}"
+JOB
+  sbatch --wait "batchenv-$(basename $sh).sbatch" >/dev/null 2>&1
+  echo "  ${sh} batch script:"; sed 's/^/    /' "batchenv-$(basename $sh).out" 2>/dev/null
+done
 
 say "RESULT"
 printf '  %s\n' "${R[@]}"
