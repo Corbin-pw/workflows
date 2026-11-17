@@ -60,6 +60,47 @@ for _p in "$HOME" "$(dirname "$SPACK_ROOT")" "$BUILDCACHE_PATH"; do
 done | sort -u
 
 # ---------------------------------------------------------------------------
+# 0b. Privileges and site directories.
+#     The login hook (service_login_hook) writes /etc/profile.d on every node, so
+#     passwordless sudo is REQUIRED for it -- and checked here, first, so a
+#     missing grant fails the run in seconds rather than after an hour of
+#     compiling. Site paths such as /software/spack live under root-owned
+#     parents: a missing one is created with sudo and handed to the user running
+#     the workflow. Spack itself never runs as root. An existing directory the
+#     user cannot write is NOT re-owned -- that is a site decision, so it fails.
+# ---------------------------------------------------------------------------
+log "Privileges and site directories"
+if [ "${service_login_hook:-false}" = "true" ]; then
+  if sudo -n true 2>/dev/null; then
+    echo "passwordless sudo: yes ($(id -un)@$(hostname)) -- required by the login hook"
+  else
+    echo "::error title=Error::'Add the modules to every user's MODULEPATH at login' needs passwordless sudo for $(id -un) on the login and compute nodes, and sudo -n failed on $(hostname). Grant it, or turn that option off and add the module tree to MODULEPATH another way." >&2
+    exit 1
+  fi
+fi
+ensure_site_dir() {
+  local d="$1" parent
+  if [ -d "$d" ]; then
+    [ -w "$d" ] && { echo "writable : $d"; return 0; }
+    echo "::error title=Error::$d exists but $(id -un) cannot write to it. An admin should give it to this user (sudo chown -R $(id -un):$(id -gn) $d) or pick another path." >&2
+    return 1
+  fi
+  parent="$d"; while [ ! -d "$parent" ]; do parent="$(dirname "$parent")"; done
+  if [ -w "$parent" ]; then
+    mkdir -p "$d"; echo "created  : $d"
+  elif sudo -n install -d -o "$(id -u)" -g "$(id -g)" -m 0755 "$d" 2>/dev/null; then
+    echo "created  : $d (with sudo, owned by $(id -un))"
+  else
+    echo "::error title=Error::cannot create $d: $parent is not writable by $(id -un) and passwordless sudo is not available. Create it for this user or pick another path." >&2
+    return 1
+  fi
+}
+ensure_site_dir "$SPACK_ROOT"
+ensure_site_dir "$BUILDCACHE_PATH"
+# The module root is created by build.sh, after Spack is cloned: it usually
+# sits inside the Spack root, and cloning refuses a non-empty directory.
+
+# ---------------------------------------------------------------------------
 # 1. Bootstrap Spack. Shallow-at-tag: the full history is ~1 GB and buys nothing.
 # ---------------------------------------------------------------------------
 # The Spack root is a user input and is often reused, so it can be in any state.

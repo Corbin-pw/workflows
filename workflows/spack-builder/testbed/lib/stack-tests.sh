@@ -17,7 +17,10 @@ fi
 [ -n "$RUN" ] && [ -s "$RUN/modulepath.env" ] || { echo "no successful full build found (need build/BUILD_STATUS=0 and modulepath.env)"; exit 2; }
 ENV_DIR="$RUN/spack-env"
 export MODULEPATH="$(cat "$RUN/modulepath.env")${MODULEPATH:+:$MODULEPATH}"
-. ~/spack/share/spack/setup-env.sh
+# The Spack root this run built into (inputs.sh), not an assumed ~/spack.
+SPROOT="$(set +u; . "$RUN/inputs.sh" >/dev/null 2>&1; echo "${service_install_prefix:-$HOME/spack}")"
+LOGIN_HOOK="$(set +u; . "$RUN/inputs.sh" >/dev/null 2>&1; echo "${service_login_hook:-false}")"
+. "$SPROOT/share/spack/setup-env.sh"
 W="/scratch/stack-tests-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$W"; cd "$W"
 N1="${TB_NODES_PER_JOB:-2}"; PPN=2
 
@@ -44,6 +47,7 @@ clean_env() {  # unload everything; blame $LOADED if PATH does not survive
 say "Stack under test"
 echo "  run dir    : $RUN"
 echo "  MODULEPATH : $(cat "$RUN/modulepath.env")"
+echo "  spack root : $SPROOT"
 echo "  work dir   : $W (shared /scratch)"
 module -t avail 2>&1 | grep -vE '^/|:$' | sed 's/^/  module: /'
 
@@ -160,6 +164,20 @@ for M in openmpi mpich intel-oneapi-mpi; do
 done
 
 clean_env
+if [ "$LOGIN_HOOK" = "true" ]; then
+  say "Login hook: a NEW login shell on every node finds the stack"
+  TREE="$(cut -d: -f1 "$RUN/modulepath.env")"
+  check "login node $(hostname -s): MODULEPATH has $TREE and openmpi loads" \
+    env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin bash -lc \
+      "echo \$MODULEPATH; case :\$MODULEPATH: in *:$TREE:*) ;; *) exit 1;; esac; module -t avail openmpi 2>&1 | grep -q '^openmpi/.' && module load openmpi && command -v mpicc"
+  for node in $(sinfo -h -N -o '%N %T' | awk '$2 !~ /down|drain|fail/ {print $1}' | sort -u); do
+    # --export=NONE: a fresh login environment on the node, not this shell's.
+    check "$node: MODULEPATH has $TREE at login and openmpi loads" \
+      srun -w "$node" -N1 -n1 -t 2 --export=NONE bash -lc \
+        "echo \$MODULEPATH; case :\$MODULEPATH: in *:$TREE:*) ;; *) exit 1;; esac; module load openmpi && command -v mpicc"
+  done
+fi
+
 say "What a batch job sees (for the MODULEPATH-at-login goal)"
 # Two shells, because they differ: `sbatch --wrap` runs /bin/sh (dash on
 # Ubuntu), which ignores BASH_ENV, while a #!/bin/bash batch script sources it

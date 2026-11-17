@@ -445,6 +445,22 @@ spack -e "$ENV_DIR" config add "modules:default:tcl:exclude:[${MODULE_EXCLUDES}]
 # modules from the same root even though its installs were untouched (the GPU
 # modules from run moral-silkworm were gone after run powerful-jaguar). Refresh
 # without it and each stack's modules persist alongside the others.
+# One flat folder (service_flat_modules, the default): <root>/<name>/<version>,
+# so MODULEPATH is exactly the module root and the external gcc lands beside
+# the stack instead of in a generic-target tree of its own. The price is one
+# CPU target per root -- the same names from another target would overwrite
+# these -- so the root records its target and refuses a different one.
+FLAT_MODULES="${service_flat_modules:-false}"
+if [ "$FLAT_MODULES" = "true" ]; then
+  TARGET_STAMP="$MODULE_ROOT/.spack-builder-target"
+  if [ -s "$TARGET_STAMP" ] && [ "$(cat "$TARGET_STAMP")" != "$TARGET" ]; then
+    echo "::error title=Error::The module tree $MODULE_ROOT already holds a stack built for target '$(cat "$TARGET_STAMP")', and this one is for '$TARGET'. In one flat folder the second would overwrite the first. Use another 'Module tree root' for this target, or turn off 'One module folder'." >&2
+    exit 1
+  fi
+  spack -e "$ENV_DIR" config add 'modules:default:arch_folder:false'
+  printf '%s\n' "$TARGET" > "$TARGET_STAMP"
+  log "Modules: one flat folder at $MODULE_ROOT (target $TARGET)"
+fi
 spack -e "$ENV_DIR" module tcl refresh -y
 
 # Second line of defence against leaked search paths (see dedup_path above):
@@ -489,6 +505,7 @@ fi
 # this workflow exists for, those differ. Run moral-silkworm built x86_64_v3 and
 # printed a skylake_avx512 MODULEPATH that held none of its modules.
 MODROOT="$MODULE_ROOT/$(spack arch -p)-$(spack arch -o)-${TARGET}"
+[ "$FLAT_MODULES" = "true" ] && MODROOT="$MODULE_ROOT"
 
 # The compiler is external with a GENERIC target, so its modulefile lands in a
 # DIFFERENT tree from everything built with it (linux-rocky9-x86_64 next to
@@ -505,7 +522,16 @@ else
     GCC_MODROOT=""
 fi
 
-if [ -n "$GCC_MODROOT" ] && [ "$GCC_MODROOT" != "$MODROOT" ]; then
+if [ "$FLAT_MODULES" = "true" ]; then
+    MODULEPATH_VALUE="$MODROOT"
+    if [ -n "$GCC_MODROOT" ]; then
+        GCC_LOAD_LINE="    module load gcc          # gcc/g++/gfortran + CC/CXX/FC, to COMPILE"
+        GCC_NOTE="One folder holds the whole stack, compiler included."
+    else
+        GCC_LOAD_LINE="    # no compiler module was generated -- 'spack load gcc' for gcc/g++/gfortran"
+        GCC_NOTE="No compiler modulefile was found under $MODULE_ROOT."
+    fi
+elif [ -n "$GCC_MODROOT" ] && [ "$GCC_MODROOT" != "$MODROOT" ]; then
     MODULEPATH_VALUE="$MODROOT:$GCC_MODROOT"
     GCC_LOAD_LINE="    module load gcc          # gcc/g++/gfortran + CC/CXX/FC, to COMPILE"
     GCC_NOTE="BOTH directories are needed. $(basename "$MODROOT") holds the stack;
@@ -516,6 +542,21 @@ else
     MODULEPATH_VALUE="$MODROOT"
     GCC_LOAD_LINE="    # no compiler module was generated -- 'spack load gcc' for gcc/g++/gfortran"
     GCC_NOTE="No compiler modulefile was found under $MODULE_ROOT."
+fi
+
+if [ "$FLAT_MODULES" = "true" ]; then
+    MODULEPATH_NOTE="
+With 'Add the modules to every user's MODULEPATH at login' on, new login
+shells get this automatically (the login_hook job reports where it installed)."
+else
+    MODULEPATH_NOTE="
+MODULEPATH must name the module tree(s) above exactly, never the parent
+
+    $MODULE_ROOT
+
+The autoload lines inside every modulefile are bare names resolved against a
+MODULEPATH entry, so a parent-level entry makes every load fail with
+\"ERROR: Unable to locate a modulefile for 'gcc-runtime/14.2.0-none-none'\"."
 fi
 
 # The endpoint job prints this same MODULEPATH on its page. It runs in its own
@@ -538,12 +579,5 @@ $GCC_LOAD_LINE
     module load gromacs
 
 $GCC_NOTE
-
-MODULEPATH must name the module tree(s) above exactly, never the parent
-
-    $MODULE_ROOT
-
-The autoload lines inside every modulefile are bare names resolved against a
-MODULEPATH entry, so a parent-level entry makes every load fail with
-"ERROR: Unable to locate a modulefile for 'gcc-runtime/14.2.0-none-none'".
+$MODULEPATH_NOTE
 EOF

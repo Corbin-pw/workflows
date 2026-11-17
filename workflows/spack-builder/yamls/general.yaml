@@ -204,15 +204,17 @@ permissions: ['*']
             type: string
             label: Spack root
             description: On a filesystem shared between the login and compute nodes.
-            default: ${HOME}/spack
+            default: /software/spack
             tooltip: >-
               Must be on a filesystem shared between the login and compute nodes.
-              Kept in user space so no step needs sudo.
+              Created with sudo when missing and handed to the user running the
+              workflow; Spack itself never runs as root. ${HOME}/spack keeps
+              everything in user space instead.
           buildcache_path:
             type: string
             label: Binary build cache
             description: Later runs install from it instead of recompiling.
-            default: ${HOME}/spack-buildcache
+            default: /software/spack-buildcache
             tooltip: >-
               Directory-backed Spack mirror. Every package built here is pushed to it,
               and later runs install from it instead of recompiling.
@@ -220,13 +222,37 @@ permissions: ['*']
             type: string
             label: Module tree root
             description: Leave blank for <Spack root>/share/spack/modules.
-            default: ${HOME}/pw/software/modules
+            default: /software/spack/modulefiles
             tooltip: >-
               Where Spack writes the TCL module tree. Modules land in
               <root>/<platform>-<os>-<target>, so stacks built for different
               microarchitectures already land side by side; point separate stacks
               at separate roots to keep them fully independent. Leave blank to use
               <Spack root>/share/spack/modules.
+          flat_modules:
+            type: boolean
+            label: One module folder
+            description: All modulefiles go directly in the module tree root, so MODULEPATH is that one folder.
+            default: true
+            tooltip: >-
+              On: modules land in <module root>/<name>/<version>, and MODULEPATH
+              is exactly the module root. One CPU target per root -- a second
+              target is refused rather than overwriting the first.
+              Off: Spack's per-architecture subfolders
+              (<module root>/linux-<os>-<target>, plus a generic one for gcc),
+              which can hold several targets side by side.
+          login_hook:
+            type: boolean
+            label: Add the modules to every user's MODULEPATH at login
+            description: Needs passwordless sudo on the login and compute nodes; checked before anything is built.
+            default: true
+            tooltip: >-
+              Installs /etc/profile.d/z99-spack-builder-modules.sh on the login
+              node and on every compute node Slurm can reach. That root-owned
+              file only sources <Spack root>/etc/profile.d/spack-modules.sh,
+              which the workflow owns and rewrites, so later runs never need
+              sudo to change the module path. A batch job inherits MODULEPATH
+              from the shell that submitted it.
           build_jobs:
             type: number
             label: Parallel build jobs (-j)
@@ -354,6 +380,8 @@ jobs:
           service_build_jobs="${{ inputs.service.build_jobs }}"
           service_build_gpu="${{ inputs.service.build_gpu }}"
           service_module_root="${{ inputs.service.module_root }}"
+          service_flat_modules="${{ inputs.service.flat_modules }}"
+          service_login_hook="${{ inputs.service.login_hook }}"
           service_concretize_only="${{ inputs.service.concretize_only }}"
           service_use_public_buildcache="${{ inputs.service.use_public_buildcache }}"
           service_build_on="${{ inputs.cluster.build_on }}"
@@ -719,10 +747,26 @@ jobs:
   #    submitted job here, so its ./cancel.sh and its run.<JOBID>.out cannot
   #    collide with the build's.
   # -------------------------------------------------------------------------
-  endpoint:
+  login_hook:
     needs:
       - preprocess
       - exec_verify
+    ssh:
+      remoteHost: ${{ inputs.cluster.resource.ip }}
+    steps:
+      - name: Add the module tree to MODULEPATH at login
+        run: |
+          set -euo pipefail
+          cd "${{ needs.preprocess.outputs.RUNDIR }}"
+          set -a; . ./inputs.sh; set +a
+          # Always runs, and decides inside: a job skipped with `if:` would
+          # leave the endpoint job, which needs this one, unable to start.
+          bash "${app_dir}/install-login-hook.sh" "${{ inputs.cluster.slurm.partition }}"
+
+  endpoint:
+    needs:
+      - preprocess
+      - login_hook
     steps:
       - name: Serve the placeholder endpoint
         uses: github/parallelworks/workflows@canary

@@ -237,9 +237,11 @@ overrides are rejected. Use `cuda-arch=none` to force a CPU-only build.
   build cache, inspects the hardware, renders and concretizes — then stops before
   the long compile. This is the fast way to validate a new cluster or a spec
   change, and it is what the recorded test uses.
-- **Spack root** (`install_prefix`, default `${HOME}/spack`) must be on a
-  filesystem shared between login and compute nodes. Keeping it in user space is
-  what removes every `sudo` from this workflow. An existing root is reused, never deleted: a git
+- **Spack root** (`install_prefix`, default `/software/spack`) must be on a
+  filesystem shared between login and compute nodes. A missing root (and build
+  cache) is created with `sudo -n` and handed to the user running the workflow;
+  Spack itself never runs as root. `${HOME}/spack` keeps everything in user
+  space and needs no sudo at all (turn off the login hook too). An existing root is reused, never deleted: a git
   clone is switched to the requested tag only if it is on a different commit; a
   usable Spack that is not a git clone is used as found, with a warning if its
   version differs; and any other non-empty directory, or an unreadable `.git`
@@ -251,11 +253,52 @@ overrides are rejected. Use `cuda-arch=none` to force a CPU-only build.
   depends on it. A different root puts gcc at a different path, so its stack
   packages get new hashes and are compiled rather than taken from the cache.
 
+## Site install: `/software/spack`, one module folder, MODULEPATH at login
+
+The defaults install a site stack rather than a personal one:
+
+| Input | Default | |
+|---|---|---|
+| Spack root | `/software/spack` | Spack clone and install tree |
+| Module tree root | `/software/spack/modulefiles` | |
+| Binary build cache | `/software/spack-buildcache` | outside the root, so it survives deleting the root |
+| One module folder | on | `modules:default:arch_folder:false` -- `MODULEPATH` is exactly the module root |
+| Add the modules to every user's MODULEPATH at login | on | needs passwordless sudo |
+
+**One module folder.** Spack normally files modules under
+`<root>/<platform>-<os>-<target>`, and the external gcc under a second, generic
+target (see below). With this on, everything lands in `<root>/<name>/<version>`
+and the gcc module sits beside the stack. One CPU target per root: the root
+records its target in `.spack-builder-target`, and a run for another target
+fails instead of overwriting the first stack's modules.
+
+**MODULEPATH at login.** The `login_hook` job, after the execution check, writes
+two files:
+
+- `<Spack root>/etc/profile.d/spack-modules.sh`, owned by the workflow user,
+  rewritten every run: prepends the module tree to `MODULEPATH` once (POSIX sh,
+  safe to source repeatedly);
+- `/etc/profile.d/z99-spack-builder-modules.sh`, root-owned, on the login node
+  and every compute node Slurm can reach: it only sources the first file, so
+  root is needed once and later module-path changes need none.
+
+Passwordless sudo is **required** when the option is on, and `controller.sh`
+checks it before anything is built. A node Slurm cannot reach within two
+minutes is reported as a warning with the one command to run there. Batch jobs
+inherit `MODULEPATH` from the submitting shell; `module` itself is available in
+`#!/bin/bash` batch scripts (Lmod's `BASH_ENV`), not under `sbatch --wrap`,
+which runs `/bin/sh`.
+
+Future direction (not implemented): move the privileged steps to Ansible
+playbooks, so sudo can be authenticated interactively once instead of requiring
+passwordless sudo.
+
 ## Where the modules go, and holding several stacks
 
 The module tree root is the `module_root` form input (default
-`${HOME}/pw/software/modules`), not a fixed path under the Spack root, because a
-cluster is expected to hold more than one stack.
+`/software/spack/modulefiles`), not a fixed path under the Spack root, because a
+cluster is expected to hold more than one stack. The rest of this section
+describes the per-architecture layout used when "One module folder" is off.
 
 Spack keys the tree by **spec** architecture — `<root>/<platform>-<os>-<target>`
 — so stacks built for different targets already separate themselves. Point
@@ -411,7 +454,7 @@ against one while the module tree advertises the other.
 
 ```
 yamls/general.yaml        preprocess -> detect (worker) -> size_build -> build (login node or worker)
-                          -> verify -> exec_check -> endpoint + wait_for_endpoint
+                          -> verify -> exec_check -> login_hook -> endpoint + wait_for_endpoint
 app/controller.sh         login node: bootstrap Spack, head externals, build cache
 app/detect-fabric.sh      worker: fabric + GPU + microarchitecture + CPU counts + externals probe
 app/cpu-counts.sh         one node's logical CPUs, physical cores and Slurm CPUTot
@@ -420,6 +463,7 @@ app/site-externals.py     move the managed externals between site scope and a fi
 app/prefetch-sources.py   download every to-be-compiled source into the shared cache
 app/build.sh              build node: apply worker externals, render, concretize,
                           install, push, modules
+app/install-login-hook.sh login node: MODULEPATH at login on every node (sudo)
 app/start-template.sh     login node: the placeholder endpoint
 app/inspect-buildcache.py build cache inventory, integrity and hit/miss forecast
 app/resolve-profile.sh    all-or-nothing override policy
@@ -428,6 +472,7 @@ app/render-env.py         spack.yaml.in + fabric fragment -> spack.yaml
 app/packages.yaml         site externals baseline (policy, not versions)
 app/templates/            environment template + 5 fabric fragments
 tests/general/            recorded end-to-end test
+testbed/                  virtual Ubuntu 22.04 Slurm cluster (LXD) for developing this workflow
 ```
 
 ## Known gaps and deferred work
