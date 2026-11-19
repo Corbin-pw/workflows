@@ -172,8 +172,10 @@ if [ "$LOGIN_HOOK" = "true" ]; then
       "echo \$MODULEPATH; case :\$MODULEPATH: in *:$TREE:*) ;; *) exit 1;; esac; module -t avail openmpi 2>&1 | grep -q '^openmpi/.' && module load openmpi && command -v mpicc"
   for node in $(sinfo -h -N -o '%N %T' | awk '$2 !~ /down|drain|fail/ {print $1}' | sort -u); do
     # --export=NONE: a fresh login environment on the node, not this shell's.
+    # That includes no PATH, so the shell must be named by its full path
+    # (plain `bash` fails with "execve(): bash: No such file or directory").
     check "$node: MODULEPATH has $TREE at login and openmpi loads" \
-      srun -w "$node" -N1 -n1 -t 2 --export=NONE bash -lc \
+      srun -w "$node" -N1 -n1 -t 2 --export=NONE /bin/bash -lc \
         "echo \$MODULEPATH; case :\$MODULEPATH: in *:$TREE:*) ;; *) exit 1;; esac; module load openmpi && command -v mpicc"
   done
 fi
