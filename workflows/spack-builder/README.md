@@ -310,6 +310,38 @@ while the external compiler carries a generic one (`linux-rocky9-x86_64`), so th
 `gcc` modulefile is filed apart from everything built with it. Both belong on
 `MODULEPATH` — see "After the build".
 
+## The GPU path: CUDA version and libraries
+
+With **Build the GPU path** on, the environment gains, next to the CPU stack:
+
+| Root | Notes |
+|---|---|
+| `cuda@<CUDA toolkit version>` | default **12.9.1**; pinned only when Spack builds CUDA |
+| CUDA-aware OpenMPI | the fabric fragment's `cuda_aware_mpi_specs` |
+| `gromacs +cuda` | single-GPU build (see below) |
+| `osu-micro-benchmarks +cuda` | device-buffer latency/bandwidth (`-d cuda D D`) |
+| GPU libraries | default `cudnn nccl nvshmem cufftmp`, each with a module |
+
+**Why 12.9.1.** Spack refuses gcc 14 -- the stack compiler -- with CUDA 12.6 or
+older (`conflicts("%gcc@14:", when="%cuda@:12.6")` in
+`build_systems/cuda.py`), so the lowest usable toolkit is 12.8, above the
+customer minimum of 12.4. cuFFTMp is published for CUDA 12 only
+(`cufftmp@11.4.0.6`, `..._cuda12-archive`), and GROMACS 2025.4 failed to link
+against nvcc 13.2 (Known gaps). A toolkit already on the compute nodes is used
+instead, and the run fails before building anything if it is older than 12.8.
+
+**One cuda-aware MPI.** Every root that links the cuda-aware MPI --
+`gromacs +cuda`, `osu +cuda`, `nvshmem`, `cufftmp` -- carries the fragment's
+*whole* `cuda_aware_mpi_specs` string (`render-env.py`, `gpu_specs()`), because
+under `unify: false` a bare `^openmpi+cuda` concretizes to a different openmpi
+(the same trap as the CPU path's MPI requirements). The `generic` fragment's
+GROMACS spec used the bare form; it is rewritten at render time.
+
+**GROMACS stays single-GPU.** Its `+cufftmp` and `+nvshmem` variants depend on
+`nvhpc`, the whole NVIDIA HPC SDK (10 GB+), not on the standalone `cufftmp` and
+`nvshmem` packages, and they only pay off with several GPUs. cuFFTMp and
+NVSHMEM are still installed as libraries for users' own codes.
+
 ## Module names in a GPU build
 
 A GPU environment holds a `~cuda` and a `+cuda` build of the same

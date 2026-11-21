@@ -106,3 +106,11 @@ __GROMACS_GPU_SPECS__
           - mpich
           - intel-oneapi-mpi
           - gromacs
+          # GPU path only (absent from a CPU environment, so harmless there).
+          # `cuda` matters when it is a site external: include wins over the
+          # external exclude, so users still get a module for the cluster's toolkit.
+          - cuda
+          - cudnn
+          - nccl
+          - nvshmem
+          - cufftmp

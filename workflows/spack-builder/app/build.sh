@@ -179,6 +179,16 @@ if [ "$GPU_ACTIVE" = "1" ] && [ -n "${CUDA_PREFIX:-}" ]; then
   CUDA_VER="${CUDA_VER:-${NVCC_VERSION:-}}"
   log "Registering external CUDA ${CUDA_VER:-<unknown version>} at $CUDA_PREFIX"
   [ -n "$CUDA_VER" ] || { echo "::error title=Error::cannot read a CUDA version from $CUDA_PREFIX/bin/nvcc" >&2; exit 1; }
+  # The cluster's toolkit wins over the 'CUDA toolkit version' input -- but it
+  # must work with the stack compiler. Spack refuses gcc 14 with CUDA <= 12.6
+  # (build_systems/cuda.py), and that surfaces as an unreadable concretizer
+  # error after gcc has been built. Say it now, in words.
+  if [ "$(printf '%s\n12.8\n' "$CUDA_VER" | sort -V | head -1)" != "12.8" ]; then
+    echo "::error title=Error::The CUDA toolkit on the compute nodes ($CUDA_PREFIX) is $CUDA_VER; the gcc 14 stack compiler needs CUDA 12.8 or newer. Upgrade it, or remove it from the compute nodes' path so Spack builds CUDA ${service_cuda_version:-12.9.1}." >&2
+    exit 1
+  fi
+  [ -n "${service_cuda_version:-}" ] && [ "${service_cuda_version}" != "$CUDA_VER" ] && \
+    echo "::notice::Using the cluster's CUDA $CUDA_VER from $CUDA_PREFIX; the 'CUDA toolkit version' input (${service_cuda_version}) only applies when Spack builds CUDA"
 
   # Written as a YAML file rather than passed to `spack config add` as a path
   # expression. That form cannot express this value: `config add` splits its
@@ -214,6 +224,13 @@ mkdir -p "$ENV_DIR"
 MODULE_ROOT="${service_module_root:-$SPACK_ROOT/share/spack/modules}"
 mkdir -p "$MODULE_ROOT"
 
+# GPU path inputs for render-env.py, by environment rather than more positional
+# arguments. The CUDA pin applies only when Spack builds CUDA: a registered
+# site external (CUDA_PREFIX, above) is non-buildable and would contradict it.
+if [ "$GPU_ACTIVE" = "1" ]; then
+  export SB_GPU_LIBS="${service_gpu_libraries:-cudnn nccl nvshmem cufftmp}"
+  if [ -n "${CUDA_PREFIX:-}" ]; then export SB_CUDA_VERSION=""; else export SB_CUDA_VERSION="${service_cuda_version:-12.9.1}"; fi
+fi
 RENDER_OUT="$(spack python "$APP_DIR/render-env.py" \
       "$FRAG" "$APP_DIR/templates/spack.yaml.in" "$ENV_DIR/spack.yaml" \
       "$TARGET" "$GPU_ACTIVE" "$EFFECTIVE_ARCH" "$MODULE_ROOT")"

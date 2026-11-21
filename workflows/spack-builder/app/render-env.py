@@ -16,6 +16,8 @@ outright ("found duplicate key"). Merging the parsed dicts -- and concatenating
 `require` lists rather than letting one win -- is what lets both live together.
 """
 
+import os
+import re
 import sys
 
 import yaml
@@ -47,6 +49,51 @@ def merge_packages(base, extra):
     return base
 
 
+# GPU libraries installed for users on the GPU path (service_gpu_libraries).
+# The MPI-dependent ones are built against THE cuda-aware MPI spec of the
+# fabric fragment -- see gpu_specs() for why the whole spec is repeated.
+GPU_LIBRARIES = {
+    "cudnn":   "cudnn",
+    "nccl":    "nccl +cuda",
+    "nvshmem": "nvshmem +cuda +mpi +ucx +nccl +gdrcopy ^{mpi}",
+    "cufftmp": "cufftmp +cuda ^nvshmem +cuda +mpi +ucx +nccl +gdrcopy ^{mpi}",
+}
+
+
+def gpu_specs(frag, cuda_arch, libraries):
+    """Root specs the GPU path adds beyond the fragment's own lists.
+
+    Under `unify: false` every root concretizes on its own, so a bare
+    `^openmpi+cuda` resolves to a DIFFERENT openmpi than the fragment's
+    cuda-aware MPI spec (the README's two-copies trap: gromacs linked against
+    one openmpi while the module tree advertised the other). Every root that
+    links the cuda-aware MPI therefore carries that exact spec, and so resolves
+    to the same node. The fragment's gromacs GPU spec is rewritten the same way
+    when it uses the bare form.
+    """
+    mpi = [s.replace("__CUDA_ARCH__", cuda_arch) for s in frag.get("cuda_aware_mpi_specs", [])]
+    if not mpi:
+        return [], []
+    cuda_mpi = mpi[0]
+
+    def share_mpi(spec):
+        if "fabrics=" in spec or not re.search(r"\^openmpi\s*\+cuda\b", spec):
+            return spec
+        spec = re.sub(r"\^openmpi\s*\+cuda\b", "", spec)
+        spec = re.sub(r"\^cuda(?![-_@\w])", "", spec)
+        return " ".join(spec.split()) + " ^" + cuda_mpi
+
+    gromacs = [share_mpi(s.replace("__CUDA_ARCH__", cuda_arch))
+               for s in frag.get("gromacs_gpu_specs", [])]
+    extra = ["cuda", "osu-micro-benchmarks +cuda ^" + cuda_mpi]
+    for lib in libraries:
+        if lib not in GPU_LIBRARIES:
+            sys.exit("render-env: unknown GPU library %r (choose from %s)"
+                     % (lib, " ".join(GPU_LIBRARIES)))
+        extra.append(GPU_LIBRARIES[lib].format(mpi=cuda_mpi))
+    return gromacs, extra
+
+
 def main(argv):
     frag_path, tmpl_path, out_path, target, gpu_active, cuda_arch, module_root = argv[1:8]
     gpu_active = gpu_active == "1"
@@ -72,7 +119,7 @@ def main(argv):
         ("__MPI_SPECS__", specs_block("mpi_specs")),
         ("__CUDA_AWARE_MPI_SPECS__", specs_block("cuda_aware_mpi_specs", gpu_active)),
         ("__GROMACS_SPECS__", specs_block("gromacs_specs")),
-        ("__GROMACS_GPU_SPECS__", specs_block("gromacs_gpu_specs", gpu_active)),
+        ("__GROMACS_GPU_SPECS__", ""),   # added below, sharing the cuda-aware MPI
     ]:
         tmpl = tmpl.replace(placeholder, value)
 
@@ -85,6 +132,26 @@ def main(argv):
     env = yaml.safe_load(tmpl)
     env["spack"]["packages"] = merge_packages(env["spack"].get("packages", {}),
                                               frag.get("packages", {}))
+
+    # GPU path: CUDA pinned (unless the cluster's own toolkit is registered as
+    # an external -- build.sh then leaves SB_CUDA_VERSION empty), the GPU
+    # libraries, and every MPI-dependent GPU root sharing one cuda-aware MPI.
+    if gpu_active:
+        cuda_version = os.environ.get("SB_CUDA_VERSION", "").strip().lstrip("@")
+        libraries = os.environ.get("SB_GPU_LIBS", "").replace(",", " ").split()
+        if cuda_version:
+            env["spack"]["packages"] = merge_packages(
+                env["spack"]["packages"], {"cuda": {"require": ["@%s" % cuda_version]}})
+        gromacs_gpu, extra = gpu_specs(frag, cuda_arch, libraries)
+        specs = env["spack"].get("specs") or []
+        for spec in gromacs_gpu + extra:
+            if spec not in specs:
+                specs.append(spec)
+        env["spack"]["specs"] = specs
+        print("GPU path: cuda %s, libraries [%s]" % (
+            cuda_version or "(site external)", " ".join(libraries) or "none"))
+        for spec in gromacs_gpu + extra:
+            print("  + %s" % spec)
 
     # cuda_arch has to reach EVERY package that consumes CUDA, not only the ones
     # a spec string names. Setting it per-spec covered gromacs and missed the
