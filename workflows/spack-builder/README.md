@@ -312,6 +312,21 @@ while the external compiler carries a generic one (`linux-rocky9-x86_64`), so th
 
 ## The GPU path: CUDA version and libraries
 
+**What was already here, and what the DarpaNodes-Improvements branch added.**
+The GPU path itself predates this branch: **Build the GPU path** already added
+a CUDA-aware OpenMPI and `gromacs +cuda` to the CPU stack, read the GPU's
+compute capability on a worker and applied it as `cuda_arch` to every package,
+used a CUDA toolkit found on the compute nodes or let Spack build one, failed
+early when no usable GPU was inspected, and gave the CUDA builds their own
+module names (next section). The branch extends it:
+
+| Upstream | Added on this branch |
+|---|---|
+| CUDA from the compute nodes, else whatever Spack picks (13.4 at the time, past the nvcc 13.2 GROMACS link failure under Known gaps) | **CUDA toolkit version** input, default 12.9.1; a node toolkit older than 12.8 fails the run before anything is built |
+| CUDA-aware OpenMPI, `gromacs +cuda` | **GPU libraries** input: cuDNN, NCCL, NVSHMEM, cuFFTMp, each with a module; `osu-micro-benchmarks +cuda` for device-buffer tests |
+| The `generic` fragment's GROMACS GPU spec used a bare `^openmpi+cuda`, which under `unify: false` is a second openmpi | every consumer of the cuda-aware MPI shares one openmpi (bug fix) |
+| -- | GPU checks in `testbed/07-test-stack.sh` |
+
 With **Build the GPU path** on, the environment gains, next to the CPU stack:
 
 | Root | Notes |
