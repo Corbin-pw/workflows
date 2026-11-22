@@ -30,7 +30,9 @@ check() { local n="$1"; shift; local out; if out="$("$@" 2>&1)"; then R+=("PASS 
 # Lmod's terse listing prints a "name/" directory line before the versions.
 # A GPU build carries a -cuda- twin of openmpi, gromacs, ...; the CPU tests
 # must not pick it up, so -cuda- names are skipped unless a 3rd arg says otherwise.
-modname() { module -t avail "$1" 2>&1 | grep -E "^$1/." | grep -E "${2:-.}" | grep -vE "${3:--cuda-}" | head -1; }
+# Patterns go after -e: the default exclude starts with '-', and a bare
+# `grep -vE -cuda-` reads it as options and matches nothing.
+modname() { module -t avail "$1" 2>&1 | grep -E -e "^$1/." | grep -E -e "${2:-.}" | grep -vE -e "${3:--cuda-}" | head -1; }
 # Unloading a module must leave the shell usable. Modules generated from vendor
 # environment scripts (intel-oneapi-*) can SET PATH rather than prepend to it,
 # and unloading them then removes PATH altogether -- every later command fails.
