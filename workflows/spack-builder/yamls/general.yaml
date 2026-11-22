@@ -312,6 +312,54 @@ permissions: ['*']
               against the CUDA-aware OpenMPI; cufftmp needs nvshmem. GROMACS
               itself is built single-GPU (+cuda): its cuFFTMp/NVSHMEM options
               need the full NVIDIA HPC SDK (nvhpc) and several GPUs.
+          python_header:
+            type: header
+            text: Python environments and Conda
+            size: 14
+          python_env:
+            type: boolean
+            label: Build Python environments
+            description: Virtual environments on a Spack-built Python, from PyPI; one module each.
+            default: false
+          python_version:
+            type: string
+            label: Python version
+            description: Spack builds this python@ and every environment uses it.
+            default: '3.11'
+            hidden: ${{ !inputs.service.python_env }}
+            ignore: ${{ .hidden }}
+          python_env_specs:
+            type: editor
+            label: Environments
+            description: 'One per line -- name: pip requirements. Each becomes module py-<name>.'
+            default: |
+              # name: pip requirements (space-separated; pins like torch==2.6.0 are fine)
+              # ESM-2 comes with transformers (facebook/esm2_* models). ESM-3 (esm)
+              # gets its own environment: it caps transformers below 4.48.2 and
+              # pulls torchtext, which would hold the whole ml environment back.
+              ml: torch jax[cuda12] transformers numpy biopython mdtraj biotite scikit-learn openmm[cuda12]
+              esm3: esm
+            hidden: ${{ !inputs.service.python_env }}
+            ignore: ${{ .hidden }}
+            tooltip: >-
+              Each line builds a venv named by a hash of the Python version and
+              its requirements. An unchanged line reuses its environment; a
+              changed one builds a new environment and module version beside
+              the old one, and the module default moves to the newest. The
+              exact resolved versions are kept in requirements.lock.txt in each
+              environment. A package that installs but does not import fails
+              the run.
+          miniforge:
+            type: boolean
+            label: Install Conda/Mamba (Miniforge, conda-forge only)
+            description: Module miniforge3 for users' own environments; never uses Anaconda's 'defaults' channel.
+            default: false
+            tooltip: >-
+              conda and mamba are open source and conda-forge is free to use;
+              Anaconda's own 'defaults' channel needs a paid licence for larger
+              organisations. The installation is pinned to conda-forge, and the
+              name 'defaults' is re-pointed at conda-forge. Users' environments
+              and package caches go to ~/.conda.
           overrides_header:
             type: header
             text: Manual overrides (advanced — all three together or none)
@@ -407,6 +455,9 @@ jobs:
           service_build_gpu="${{ inputs.service.build_gpu }}"
           service_cuda_version="${{ inputs.service.cuda_version }}"
           service_gpu_libraries="${{ inputs.service.gpu_libraries }}"
+          service_python_env="${{ inputs.service.python_env }}"
+          service_python_version="${{ inputs.service.python_version }}"
+          service_miniforge="${{ inputs.service.miniforge }}"
           service_module_root="${{ inputs.service.module_root }}"
           service_flat_modules="${{ inputs.service.flat_modules }}"
           service_login_hook="${{ inputs.service.login_hook }}"
@@ -431,7 +482,12 @@ jobs:
           modulepath_env="${PWD}/modulepath.env"
           externals_head="${PWD}/externals.head.yaml"
           externals_compute="${PWD}/externals.compute.yaml"
+          python_envs_file="${PWD}/python-envs.txt"
           EOF
+          # Multi-line, so it travels as a file rather than through inputs.sh.
+          cat > python-envs.txt <<'PYENVS'
+          ${{ inputs.service.python_env_specs }}
+          PYENVS
           # Remove empty variables
           sed -i '/=\s*$\|=undefined\s*$/d' inputs.sh
           sed -i '/=""/d' inputs.sh

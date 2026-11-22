@@ -133,6 +133,16 @@ def main(argv):
     env["spack"]["packages"] = merge_packages(env["spack"].get("packages", {}),
                                               frag.get("packages", {}))
 
+    # Python environments (build-python-envs.sh) are venvs on a Spack-built
+    # python@<version>; it is a root so it is installed, cached and gets a module.
+    python_version = os.environ.get("SB_PYTHON_VERSION", "").strip()
+    if python_version:
+        specs = env["spack"].get("specs") or []
+        if "python@%s" % python_version not in specs:
+            specs.append("python@%s" % python_version)
+        env["spack"]["specs"] = specs
+        print("Python environments: python@%s added as a root" % python_version)
+
     # GPU path: CUDA pinned (unless the cluster's own toolkit is registered as
     # an external -- build.sh then leaves SB_CUDA_VERSION empty), the GPU
     # libraries, and every MPI-dependent GPU root sharing one cuda-aware MPI.

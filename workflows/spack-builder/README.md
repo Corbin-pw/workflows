@@ -357,6 +357,49 @@ GROMACS spec used the bare form; it is rewritten at render time.
 `nvshmem` packages, and they only pay off with several GPUs. cuFFTMp and
 NVSHMEM are still installed as libraries for users' own codes.
 
+## Python environments and Conda/Mamba
+
+**Build Python environments** makes one virtual environment per line of the
+**Environments** input (`name: pip requirements`), each on a Spack-built
+`python@<Python version>` (default **3.11**), each with its own module
+`py-<name>`. Packages come from PyPI; nothing depends on conda or on
+Anaconda's channels. The default list:
+
+```
+ml:   torch jax[cuda12] transformers numpy biopython mdtraj biotite scikit-learn openmm[cuda12]
+esm3: esm
+```
+
+Why two environments, found by resolving the list for Python 3.11 on
+manylinux 2.35 x86_64 before building anything:
+
+- **ESM-3** (`esm` 3.2.1) requires `transformers<4.48.2` and pulls `torchtext`
+  0.18, which is discontinued and was built for torch 2.3. In one environment
+  every user gets a January-2025 Transformers, or (forcing a current one) the
+  resolver silently drops ESM-3 to 3.0.3.
+- `fair-esm` (ESM-2) and `esm` (ESM-3) both install the import name `esm`.
+  ESM-2 is served by Transformers instead (`facebook/esm2_*`).
+
+**Python 3.11 is behind "latest".** These packages' newest releases need 3.12:
+JAX 0.12 (3.11: 0.10.2), ESM-3 3.5 (3.11: 3.2.1), NumPy 2.5 (2.4.6), MDTraj
+1.11.2 (1.11.1), Biotite 2.0 (1.6.0). Set **Python version** to 3.12 for a
+second, newer set of environments; the existing ones stay.
+
+**Updates are additive.** An environment's directory
+(`<Spack root>/envs/py-<name>-<pyver>-<hash>`) is named by a hash of the Python
+version and its requirements. An unchanged line reuses it; a changed line
+builds a new directory and module version next to the old one, and the
+module's `.version` default moves to the newest. `requirements.lock.txt` in each
+records the exact versions. A package that installs but does not import (a
+compiled extension built for another torch, say) fails the run.
+
+**Install Conda/Mamba** adds module `miniforge3` for users' own environments:
+Miniforge from conda-forge (the repo's `tools/utils/miniforge.sh`), a
+`.condarc` that lists only conda-forge and re-points the name `defaults` at it,
+and environments/package caches in `~/.conda`. conda, mamba and conda-forge are
+free to use; Anaconda's `defaults` channel needs a paid licence for larger
+organisations, so it is never configured.
+
 ## Module names in a GPU build
 
 A GPU environment holds a `~cuda` and a `+cuda` build of the same
@@ -510,6 +553,7 @@ app/site-externals.py     move the managed externals between site scope and a fi
 app/prefetch-sources.py   download every to-be-compiled source into the shared cache
 app/build.sh              build node: apply worker externals, render, concretize,
                           install, push, modules
+app/build-python-envs.sh  build node: Python venvs (PyPI) and the miniforge3 module
 app/install-login-hook.sh login node: MODULEPATH at login on every node (sudo)
 app/start-template.sh     login node: the placeholder endpoint
 app/inspect-buildcache.py build cache inventory, integrity and hit/miss forecast

@@ -277,6 +277,53 @@ CU
   clean_env
 fi
 
+# ============================================================================
+# Python environments and Conda/Mamba (only when the run built them)
+# ============================================================================
+PY_MODS="$(module -t avail 2>&1 | grep -E '^py-[A-Za-z0-9._-]+/$' | tr -d / | sort -u | tr '\n' ' ')"
+if [ -n "$PY_MODS" ]; then
+  say "Python environments: $PY_MODS"
+  FIRST_GPU="${FIRST_GPU:-$(sinfo -h -N -o '%N %G %T' | awk '$2 ~ /gpu/ && $3 !~ /down|drain/ {print $1; exit}')}"
+  for pm in $PY_MODS; do
+    clean_env; module load "$pm"; LOADED="$pm"
+    check "$pm: python is the Spack build and pip check is clean" bash -c "command -v python; python -c 'import sys; print(sys.version.split()[0], sys.prefix)'; python -m pip check"
+  done
+  if module -t avail py-ml 2>&1 | grep -q '^py-ml/.'; then
+    clean_env; module load py-ml; LOADED=py-ml
+    cat > ml_gpu.py <<'PYT'
+import torch, jax, openmm, transformers
+print("torch", torch.__version__, "cuda", torch.version.cuda, "available", torch.cuda.is_available())
+assert torch.cuda.is_available(), "torch sees no GPU"
+dev = torch.device("cuda"); print("  device:", torch.cuda.get_device_name(0), "arch list:", torch.cuda.get_arch_list())
+a = torch.randn(1024, 1024, device=dev); print("  matmul ok:", float((a @ a).sum()) == float((a @ a).sum()))
+gpus = [d for d in jax.devices() if d.platform == "gpu"]; print("jax", jax.__version__, "devices:", jax.devices())
+assert gpus, "jax sees no GPU"
+print("  jax sum on gpu:", float(jax.numpy.ones(1000).sum()))
+names = [openmm.Platform.getPlatform(i).getName() for i in range(openmm.Platform.getNumPlatforms())]
+print("openmm", openmm.__version__, "platforms:", names); assert "CUDA" in names, "OpenMM has no CUDA platform"
+from transformers import EsmConfig, EsmModel
+cfg = EsmConfig(vocab_size=33, hidden_size=64, num_hidden_layers=2, num_attention_heads=4, intermediate_size=128, pad_token_id=1, mask_token_id=32)
+m = EsmModel(cfg).to(dev).eval()
+with torch.no_grad(): out = m(torch.randint(4, 24, (2, 50), device=dev))
+print("transformers", transformers.__version__, "ESM-2 architecture forward on GPU:", tuple(out.last_hidden_state.shape))
+PYT
+    check "py-ml on $FIRST_GPU: torch, jax and OpenMM see the GPU; ESM-2 model runs on it" srun -w "$FIRST_GPU" -N1 -n1 -c 4 --gres=gpu:1 -t 10 python ml_gpu.py
+  fi
+  if module -t avail py-esm3 2>&1 | grep -q '^py-esm3/.'; then
+    clean_env; module load py-esm3; LOADED=py-esm3
+    check "py-esm3: ESM-3 classes import (no weights downloaded)" python -c "import esm, torch; from esm.models.esm3 import ESM3; from esm.sdk.api import ESMProtein; print('esm', getattr(esm, '__version__', '?'), 'torch', torch.__version__)"
+  fi
+  clean_env
+fi
+if module -t avail miniforge3 2>&1 | grep -q '^miniforge3/.'; then
+  say "Conda/Mamba (miniforge3)"
+  clean_env; module load miniforge3; LOADED=miniforge3
+  check "conda and mamba run" bash -c "conda --version && mamba --version | head -1"
+  check "only conda-forge is configured" bash -c "conda config --show channels default_channels; ! conda config --show channels default_channels | grep -qiE 'repo.anaconda.com|/pkgs/main|/pkgs/r'"
+  check "a solve uses conda-forge only (dry run, python=3.11 numpy)" bash -c "out=\$(conda create --dry-run --json -q -n tb-dryrun python=3.11 numpy 2>&1); printf '%s' \"\$out\" | grep -oE '\"channel\": *\"[^\"]*\"' | sort -u; printf '%s' \"\$out\" | grep -q '\"channel\": *\"conda-forge\"' && ! printf '%s' \"\$out\" | grep -qE '\"channel\": *\"(pkgs/main|main|anaconda)\"'"
+  clean_env
+fi
+
 say "What a batch job sees (for the MODULEPATH-at-login goal)"
 # Two shells, because they differ: `sbatch --wrap` runs /bin/sh (dash on
 # Ubuntu), which ignores BASH_ENV, while a #!/bin/bash batch script sources it

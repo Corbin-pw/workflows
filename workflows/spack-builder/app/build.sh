@@ -231,6 +231,11 @@ if [ "$GPU_ACTIVE" = "1" ]; then
   export SB_GPU_LIBS="${service_gpu_libraries:-cudnn nccl nvshmem cufftmp}"
   if [ -n "${CUDA_PREFIX:-}" ]; then export SB_CUDA_VERSION=""; else export SB_CUDA_VERSION="${service_cuda_version:-12.9.1}"; fi
 fi
+# Python environments are venvs on a Spack-built python@<version>, a root of
+# this environment (render-env.py) so it is cached and gets a module.
+if [ "${service_python_env:-false}" = "true" ]; then
+  export SB_PYTHON_VERSION="${service_python_version:-3.11}"
+fi
 RENDER_OUT="$(spack python "$APP_DIR/render-env.py" \
       "$FRAG" "$APP_DIR/templates/spack.yaml.in" "$ENV_DIR/spack.yaml" \
       "$TARGET" "$GPU_ACTIVE" "$EFFECTIVE_ARCH" "$MODULE_ROOT")"
@@ -582,6 +587,18 @@ fi
 # recomputed there from `spack arch` and a target it does not have.
 if [ -n "${modulepath_env:-}" ]; then
     printf '%s\n' "$MODULEPATH_VALUE" > "$modulepath_env"
+fi
+
+# Python environments and the Conda/Mamba module, after the stack and its module
+# tree exist. Each venv is built on the Spack python and gets a module in the
+# same tree; see build-python-envs.sh.
+if [ "${service_python_env:-false}" = "true" ] || [ "${service_miniforge:-false}" = "true" ]; then
+  log "Python environments / Conda"
+  if ! SPACK_ROOT="$SPACK_ROOT" ENV_DIR="$ENV_DIR" MODULE_DIR="${MODULEPATH_VALUE%%:*}" \
+       bash "$APP_DIR/build-python-envs.sh"; then
+    echo "::error title=Error::One or more Python environments (or Miniforge) failed -- see the [python] sections above. The Spack stack itself is installed and its modules are in place." >&2
+    exit 1
+  fi
 fi
 
 cat <<EOF
