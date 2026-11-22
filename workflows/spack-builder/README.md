@@ -362,7 +362,8 @@ NVSHMEM are still installed as libraries for users' own codes.
 **Build Python environments** makes one virtual environment per line of the
 **Environments** input (`name: pip requirements`), each on a Spack-built
 `python@<Python version>` (default **3.11**), each with its own module
-`py-<name>`. Packages come from PyPI; nothing depends on conda or on
+`<name>-env` (e.g. `ml-env`, `esm3-env`; not `py-*`, which Spack uses for its
+Python packages). Packages come from PyPI; nothing depends on conda or on
 Anaconda's channels. The default list:
 
 ```

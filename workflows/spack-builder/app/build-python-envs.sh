@@ -61,7 +61,7 @@ if [ "${service_python_env:-false}" = "true" ]; then
     hash="$(printf 'python=%s\n%s\n' "$FULLVER" "$req_in" | sha256sum | cut -c1-8)"
     modver="${PYVER}-${hash}"
     dir="$ENVS_ROOT/py-${name}-${modver}"
-    log "py-${name}: $(printf '%s ' $reqs)"
+    log "${name}-env: $(printf '%s ' $reqs)"
     if [ -f "$dir/.complete" ]; then
       echo "  unchanged -- reusing $dir"
     else
@@ -69,15 +69,15 @@ if [ "${service_python_env:-false}" = "true" ]; then
       # with .complete; a directory without the marker is a failed or
       # interrupted build of this exact environment and is redone.
       rm -rf "$dir"
-      if ! "$PYTHON" -m venv "$dir"; then echo "::error title=Error::py-${name}: venv creation failed" >&2; FAIL=1; continue; fi
+      if ! "$PYTHON" -m venv "$dir"; then echo "::error title=Error::${name}-env: venv creation failed" >&2; FAIL=1; continue; fi
       printf '%s\n' "$req_in" > "$dir/requirements.in"
       "$dir/bin/python" -m pip install -q --upgrade pip
       if ! "$dir/bin/python" -m pip install --retries 5 --timeout 120 -r "$dir/requirements.in" > "$dir/pip-install.log" 2>&1; then
-        echo "::error title=Error::py-${name}: pip install failed; last lines:" >&2; tail -30 "$dir/pip-install.log" >&2
+        echo "::error title=Error::${name}-env: pip install failed; last lines:" >&2; tail -30 "$dir/pip-install.log" >&2
         FAIL=1; continue
       fi
       "$dir/bin/python" -m pip check > "$dir/pip-check.log" 2>&1 \
-        || { echo "::warning::py-${name}: pip check reports conflicts:"; sed 's/^/    /' "$dir/pip-check.log"; }
+        || { echo "::warning::${name}-env: pip check reports conflicts:"; sed 's/^/    /' "$dir/pip-check.log"; }
       # Imports, on this (build) node. Catches a compiled extension that does
       # not load next to the resolved versions -- torchtext 0.18 was built for
       # torch 2.3 -- which pip resolves without complaint.
@@ -91,7 +91,7 @@ for m in sys.argv[1:]:
 print('imported:', ' '.join(m for m in sys.argv[1:] if not any(b.startswith(m + ':') for b in bad)))
 for b in bad: print('IMPORT FAILED', b)
 sys.exit(1 if bad else 0)" $imports); then
-        echo "::error title=Error::py-${name}: a package installed but does not import (above). Pin a compatible version in its line, e.g. 'torch==2.3.1'." >&2
+        echo "::error title=Error::${name}-env: a package installed but does not import (above). Pin a compatible version in its line, e.g. 'torch==2.3.1'." >&2
         FAIL=1; continue
       fi
       "$dir/bin/python" -m pip freeze > "$dir/requirements.lock.txt"
@@ -100,10 +100,16 @@ sys.exit(1 if bad else 0)" $imports); then
       echo "  built $dir ($(grep -c '==' "$dir/requirements.lock.txt") packages; lock: $dir/requirements.lock.txt)"
     fi
 
-    mdir="$MODULE_DIR/py-${name}"; mkdir -p "$mdir"
+    # Module <name>-env, not py-<name>: Spack already files its Python
+    # PACKAGES as py-* (py-pip, py-cython, ... arrive as build dependencies),
+    # and an environment must not look like one of them. Directories on disk
+    # keep their py-<name>-* names, so renaming the module rebuilt nothing.
+    mdir="$MODULE_DIR/${name}-env"; mkdir -p "$mdir"
+    old="$MODULE_DIR/py-${name}"
+    if [ -d "$old" ] && grep -qs 'built by spack-builder' "$old"/* ; then rm -rf "$old"; echo "  removed the old module name py-${name} (now ${name}-env)"; fi
     cat > "$mdir/$modver" <<MOD
 #%Module1.0
-## py-${name} ${modver}: Python ${FULLVER} virtual environment built by spack-builder
+## ${name}-env ${modver}: Python ${FULLVER} virtual environment built by spack-builder
 ## requirements: $(printf '%s ' $reqs)
 ## exact versions: ${dir}/requirements.lock.txt
 module-whatis "Python ${FULLVER} environment '${name}': $(printf '%s ' $reqs)"
@@ -113,7 +119,7 @@ setenv VIRTUAL_ENV ${dir}
 setenv PYTHONNOUSERSITE 1
 MOD
     printf '#%%Module1.0\nset ModulesVersion "%s"\n' "$modver" > "$mdir/.version"
-    echo "  module py-${name}/${modver} (default); all versions: $(ls "$mdir" | tr '\n' ' ')"
+    echo "  module ${name}-env/${modver} (default); all versions: $(ls "$mdir" | tr '\n' ' ')"
   done < "${python_envs_file:?python_envs_file is required}"
 fi
 

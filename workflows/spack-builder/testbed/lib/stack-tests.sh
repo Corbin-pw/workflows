@@ -190,9 +190,12 @@ fi
 if grep -qE '^\s*- cuda\s*$' "$ENV_DIR/spack.yaml"; then
   say "GPU stack"
   clean_env
-  ARCH="$(grep -oE 'cuda_arch=[0-9]+' "$ENV_DIR/spack.yaml" | head -1 | cut -d= -f2)"
+  # cuda_arch: from the environment, else the detected profile, else the GPU.
+  ARCH="$(grep -oE 'cuda_arch[=:] *[0-9]+' "$ENV_DIR/spack.yaml" | head -1 | grep -oE '[0-9]+$')"
+  [ -n "$ARCH" ] || ARCH="$(set +u; . "$RUN/fabric.env" 2>/dev/null; echo "${GPU_ARCH:-}")"
   GPU_NODES="$(sinfo -h -N -o '%N %G %T' | awk '$2 ~ /gpu/ && $3 !~ /down|drain/ {print $1}' | sort -u | tr '\n' ' ')"
   pfx() { spack -e "$ENV_DIR" find --format '{prefix}' "$1" 2>/dev/null | head -1; }
+  [ -n "$ARCH" ] || ARCH="$(srun -w "${GPU_NODES%% *}" -N1 -n1 --gres=gpu:1 -t 1 nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '. ')"
   echo "  cuda_arch=${ARCH:-?}  GPU nodes: ${GPU_NODES:-none}"
   CUDA_MOD="$(modname cuda '' '^$')"
   check "cuda module present (${CUDA_MOD:-none})" test -n "$CUDA_MOD"
@@ -282,7 +285,9 @@ fi
 # ============================================================================
 # Python environments and Conda/Mamba (only when the run built them)
 # ============================================================================
-PY_MODS="$(module -t avail 2>&1 | grep -E '^py-[A-Za-z0-9._-]+/$' | tr -d / | sort -u | tr '\n' ' ')"
+# Environments are <name>-env modules written by build-python-envs.sh (not
+# Spack's own py-* package modules).
+PY_MODS="$(module -t avail 2>&1 | grep -E -e '^[A-Za-z0-9._]+-env/$' | tr -d / | sort -u | tr '\n' ' ')"
 if [ -n "$PY_MODS" ]; then
   say "Python environments: $PY_MODS"
   FIRST_GPU="${FIRST_GPU:-$(sinfo -h -N -o '%N %G %T' | awk '$2 ~ /gpu/ && $3 !~ /down|drain/ {print $1; exit}')}"
@@ -290,8 +295,8 @@ if [ -n "$PY_MODS" ]; then
     clean_env; module load "$pm"; LOADED="$pm"
     check "$pm: python is the Spack build and pip check is clean" bash -c "command -v python; python -c 'import sys; print(sys.version.split()[0], sys.prefix)'; python -m pip check"
   done
-  if module -t avail py-ml 2>&1 | grep -q '^py-ml/.'; then
-    clean_env; module load py-ml; LOADED=py-ml
+  if module -t avail ml-env 2>&1 | grep -q '^ml-env/.'; then
+    clean_env; module load ml-env; LOADED=ml-env
     cat > ml_gpu.py <<'PYT'
 import torch, jax, openmm, transformers
 print("torch", torch.__version__, "cuda", torch.version.cuda, "available", torch.cuda.is_available())
@@ -309,11 +314,11 @@ m = EsmModel(cfg).to(dev).eval()
 with torch.no_grad(): out = m(torch.randint(4, 24, (2, 50), device=dev))
 print("transformers", transformers.__version__, "ESM-2 architecture forward on GPU:", tuple(out.last_hidden_state.shape))
 PYT
-    check "py-ml on $FIRST_GPU: torch, jax and OpenMM see the GPU; ESM-2 model runs on it" srun -w "$FIRST_GPU" -N1 -n1 -c 4 --gres=gpu:1 -t 10 python ml_gpu.py
+    check "ml-env on $FIRST_GPU: torch, jax and OpenMM see the GPU; ESM-2 model runs on it" srun -w "$FIRST_GPU" -N1 -n1 -c 4 --gres=gpu:1 -t 10 python ml_gpu.py
   fi
-  if module -t avail py-esm3 2>&1 | grep -q '^py-esm3/.'; then
-    clean_env; module load py-esm3; LOADED=py-esm3
-    check "py-esm3: ESM-3 classes import (no weights downloaded)" python -c "import esm, torch; from esm.models.esm3 import ESM3; from esm.sdk.api import ESMProtein; print('esm', getattr(esm, '__version__', '?'), 'torch', torch.__version__)"
+  if module -t avail esm3-env 2>&1 | grep -q '^esm3-env/.'; then
+    clean_env; module load esm3-env; LOADED=esm3-env
+    check "esm3-env: ESM-3 classes import (no weights downloaded)" python -c "import esm, torch; from esm.models.esm3 import ESM3; from esm.sdk.api import ESMProtein; print('esm', getattr(esm, '__version__', '?'), 'torch', torch.__version__)"
   fi
   clean_env
 fi

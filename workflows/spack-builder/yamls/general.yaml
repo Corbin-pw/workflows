@@ -331,7 +331,7 @@ permissions: ['*']
           python_env_specs:
             type: editor
             label: Environments
-            description: 'One per line -- name: pip requirements. Each becomes module py-<name>.'
+            description: 'One per line -- name: pip requirements. Each becomes module <name>-env.'
             default: |
               # name: pip requirements (space-separated; pins like torch==2.6.0 are fine)
               # ESM-2 comes with transformers (facebook/esm2_* models). ESM-3 (esm)
