@@ -292,7 +292,14 @@ if [ -n "$PY_MODS" ]; then
   say "Python environments: $PY_MODS"
   FIRST_GPU="${FIRST_GPU:-$(sinfo -h -N -o '%N %G %T' | awk '$2 ~ /gpu/ && $3 !~ /down|drain/ {print $1; exit}')}"
   for pm in $PY_MODS; do
-    clean_env; module load "$pm"; LOADED="$pm"
+    clean_env
+    # A modulefile with a Tcl error loads nothing and only says so on stderr;
+    # report that as itself rather than as a missing python.
+    if ! module load "$pm" 2>"lmod-$pm.err" || grep -qiE 'error' "lmod-$pm.err"; then
+      R+=("FAIL  $pm: module does not load"); echo "  [FAIL] $pm: module does not load"; sed 's/^/         /' "lmod-$pm.err" | head -6
+      continue
+    fi
+    LOADED="$pm"
     check "$pm: python is the Spack build and pip check is clean" bash -c "command -v python; python -c 'import sys; print(sys.version.split()[0], sys.prefix)'; python -m pip check"
   done
   if module -t avail ml-env 2>&1 | grep -q '^ml-env/.'; then

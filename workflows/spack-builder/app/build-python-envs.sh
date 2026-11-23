@@ -23,6 +23,11 @@
 # one, and only the module's default moves to the newest.
 set -uo pipefail
 log() { printf '\n=== [python] %s ===\n' "$*"; }
+# Text that goes into a Tcl modulefile. Inside double quotes Tcl substitutes
+# [cmd], $var and backslashes, so "openmm[cuda12]" in module-whatis RAN a command
+# called cuda12, and Lmod abandoned the load: the ml environment's module
+# silently did nothing (testbed 07: "python: command not found").
+tcl_quote() { printf '%s' "$1" | sed 's/[][$"\\]/\\&/g'; }
 : "${SPACK_ROOT:?}" "${ENV_DIR:?}" "${MODULE_DIR:?}"
 ENVS_ROOT="$SPACK_ROOT/envs"
 FAIL=0
@@ -111,12 +116,13 @@ sys.exit(1 if bad else 0)" $imports); then
     mdir="$MODULE_DIR/${name}-env"; mkdir -p "$mdir"
     old="$MODULE_DIR/py-${name}"
     if [ -d "$old" ] && grep -qs 'built by spack-builder' "$old"/* ; then rm -rf "$old"; echo "  removed the old module name py-${name} (now ${name}-env)"; fi
+    whatis="$(tcl_quote "Python ${FULLVER} environment '${name}': $(printf '%s ' $reqs)")"
     cat > "$mdir/$modver" <<MOD
 #%Module1.0
 ## ${name}-env ${modver}: Python ${FULLVER} virtual environment built by spack-builder
 ## requirements: $(printf '%s ' $reqs)
 ## exact versions: ${dir}/requirements.lock.txt
-module-whatis "Python ${FULLVER} environment '${name}': $(printf '%s ' $reqs)"
+module-whatis "${whatis}"
 prepend-path PATH ${dir}/bin
 setenv VIRTUAL_ENV ${dir}
 # Keep ~/.local site-packages out of a shared environment.
