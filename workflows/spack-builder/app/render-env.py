@@ -94,6 +94,99 @@ def gpu_specs(frag, cuda_arch, libraries):
     return gromacs, extra
 
 
+
+# --- additional software (service_extra_specs / service_mpich_extra_versions) --
+SPEC_NAME = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*(.*)$")
+BARE_VERSION = re.compile(r"^@[^\s%^+~=]+$")
+
+
+def read_spec_lines(path):
+    """One Spack spec per line; '#' starts a comment, blank lines are skipped."""
+    if not path or not os.path.isfile(path):
+        return []
+    out = []
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                out.append(" ".join(line.split()))
+    return out
+
+
+def add_version_alongside(packages, name, version):
+    """Let `name@version` coexist with the version the template pins.
+
+    The template pins each MPI with `require: ["@x"]` so that a bare `^mpich`
+    in gromacs or osu resolves to the same build as the standalone MPI. A
+    second version can only be installed if that pin becomes a choice:
+    `one_of: ["@x", "@y"]`. Consumers that do not name a version still get the
+    newest (the solver prefers newer versions, and both are installed), and
+    the extra version is reached only by asking for it explicitly.
+    Returns True if a pin was widened, False if the package had none.
+    """
+    cfg = packages.get(name)
+    if not cfg or "require" not in cfg:
+        return False
+    req = cfg["require"]
+    req = [req] if isinstance(req, (str, dict)) else list(req)
+    want = "@%s" % version.lstrip("@")
+    for i, item in enumerate(req):
+        if isinstance(item, str) and BARE_VERSION.match(item):
+            if item != want:
+                req[i] = {"one_of": [item, want]}
+            cfg["require"] = req
+            return True
+        if isinstance(item, dict) and "one_of" in item and \
+                all(isinstance(x, str) and BARE_VERSION.match(x) for x in item["one_of"]):
+            if want not in item["one_of"]:
+                item["one_of"].append(want)
+            cfg["require"] = req
+            return True
+    return False
+
+
+def add_extra_specs(env, lines):
+    """Add user-requested roots, keeping the stack to ONE build per package.
+
+    For a spec with its own constraints and no dependency clause
+    (`git +tcltk`, `cmake@3.31`), the constraints also become a package
+    requirement: under `unify: false` any other root that depends on the same
+    package would otherwise concretize its own copy with default variants, and
+    two builds of one name/version abort `module tcl refresh` with "Name clashes
+    detected" (the ucx lesson in fabric-azure.yaml). A package the template
+    already pins (the MPIs, the compiler) instead gets its version pin widened
+    by add_version_alongside, so the existing build is untouched.
+    """
+    spack = env["spack"]
+    packages = spack.setdefault("packages", {})
+    specs = spack.get("specs") or []
+    include = spack["modules"]["default"]["tcl"].setdefault("include", [])
+    for line in lines:
+        m = SPEC_NAME.match(line)
+        if not m:
+            sys.exit("render-env: cannot read additional spec %r" % line)
+        name, rest = m.group(1), m.group(2).strip()
+        note = ""
+        if rest and "^" not in rest and "%" not in rest:
+            ver = re.match(r"^@([^\s%^+~=]+)\s*(.*)$", rest)
+            if name in packages and "require" in packages[name]:
+                if ver and add_version_alongside(packages, name, ver.group(1)):
+                    note = "(alongside the pinned version)"
+                else:
+                    note = "(root only: %s already has a requirement)" % name
+            else:
+                packages.setdefault(name, {})["require"] = [rest]
+                note = "(also required of every %s in the stack)" % name
+        if line not in specs:
+            specs.append(line)
+        # include wins over the externals exclude: if a site external satisfies
+        # the spec, users still get a module for it.
+        if name not in include:
+            include.append(name)
+        print("  + %s %s" % (line, note))
+    spack["specs"] = specs
+
+
 def main(argv):
     frag_path, tmpl_path, out_path, target, gpu_active, cuda_arch, module_root = argv[1:8]
     gpu_active = gpu_active == "1"
@@ -142,6 +235,23 @@ def main(argv):
             specs.append("python@%s" % python_version)
         env["spack"]["specs"] = specs
         print("Python environments: python@%s added as a root" % python_version)
+
+    # Additional MPICH versions (service_mpich_extra_versions), each with an OSU
+    # build so the launch can be tested like the pinned one.
+    mpich_versions = os.environ.get("SB_MPICH_EXTRA_VERSIONS", "").replace(",", " ").split()
+    if mpich_versions:
+        print("Additional MPICH versions: %s" % " ".join(mpich_versions))
+        extra = []
+        for v in mpich_versions:
+            v = v.lstrip("@")
+            extra += ["mpich@%s" % v, "osu-micro-benchmarks ^mpich@%s" % v]
+        add_extra_specs(env, extra)
+
+    # Additional software (service_extra_specs), one Spack spec per line.
+    extra_lines = read_spec_lines(os.environ.get("SB_EXTRA_SPECS_FILE", ""))
+    if extra_lines:
+        print("Additional software: %d spec(s)" % len(extra_lines))
+        add_extra_specs(env, extra_lines)
 
     # GPU path: CUDA pinned (unless the cluster's own toolkit is registered as
     # an external -- build.sh then leaves SB_CUDA_VERSION empty), the GPU

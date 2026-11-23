@@ -236,6 +236,10 @@ fi
 if [ "${service_python_env:-false}" = "true" ]; then
   export SB_PYTHON_VERSION="${service_python_version:-3.11}"
 fi
+# Additional software: a file of Spack specs (one per line) and extra MPICH
+# versions installed alongside the pinned one (render-env.py add_extra_specs).
+export SB_EXTRA_SPECS_FILE="${extra_specs_file:-}"
+export SB_MPICH_EXTRA_VERSIONS="${service_mpich_extra_versions:-}"
 RENDER_OUT="$(spack python "$APP_DIR/render-env.py" \
       "$FRAG" "$APP_DIR/templates/spack.yaml.in" "$ENV_DIR/spack.yaml" \
       "$TARGET" "$GPU_ACTIVE" "$EFFECTIVE_ARCH" "$MODULE_ROOT")"

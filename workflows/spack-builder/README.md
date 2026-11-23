@@ -18,6 +18,7 @@ endpoint is a placeholder serving an empty page — see
 | Applications | `gromacs@2025.4`, one build per MPI |
 | Validation | `osu-micro-benchmarks`, one build per MPI |
 | Optional GPU path | CUDA-aware `openmpi+cuda` and `gromacs+cuda` |
+| Additional software | Any Spack specs listed under **Additional Spack packages** (default: `apptainer`, `cmake`, `git +tcltk`, `git-lfs`), and **Additional MPICH versions** (default `3.4.3`) beside the default MPICH |
 
 The three MPIs coexist in one environment via `concretizer: unify: false`.
 
@@ -404,6 +405,63 @@ and environments/package caches in `~/.conda`. conda, mamba and conda-forge are
 free to use; Anaconda's `defaults` channel needs a paid licence for larger
 organisations, so it is never configured.
 
+## Additional software and extra MPI versions
+
+**Additional Spack packages** is an editor with one Spack spec per line; `#`
+starts a comment. Each line becomes a root of the environment and gets a
+module. Any package the configured Spack repositories and mirrors offer can be
+listed. The defaults cover the customer list's tools:
+
+| Line | Module(s) | Notes |
+|---|---|---|
+| `apptainer` | `apptainer` | Built without the setuid starter, so it runs through unprivileged user namespaces (the cluster must allow them; Ubuntu 22.04 does by default). |
+| `cmake` | `cmake` | The newest release. Projects that still declare `cmake_minimum_required` below 3.5 need CMake 3.x; add `cmake@3.31` as another line. |
+| `git +tcltk` | `git` (+ `tk`, `tcl`) | `+tcltk` installs the two Git GUIs, `git gui` and `gitk`. They need an X display (`ssh -X`, or a desktop session). |
+| `git-lfs` | `git-lfs` | |
+
+"Git Desktop" (GitHub Desktop) has no official Linux release, so `git gui` and
+`gitk` are the GUIs provided. A community Linux build of GitHub Desktop exists,
+but it is an Electron app outside Spack and is not installed.
+
+How a line is applied, so that the stack keeps one build per package:
+
+- **Variants on a line become a requirement on that package.** `git +tcltk`
+  also adds `packages: git: require: ["+tcltk"]`. Without it, any other root
+  that depends on git would concretize its own copy with default variants
+  under `unify: false`, and two builds of one name and version abort
+  `module tcl refresh` with "Name clashes detected" (the same failure the ucx
+  requirement in `fabric-azure.yaml` fixes).
+- **A version of a package the stack already pins is installed alongside it.**
+  The template pins each MPI (`openmpi: require: ["@5.0.10"]`). A line such as
+  `openmpi@4.1.6` widens that pin to `one_of: ["@5.0.10", "@4.1.6"]`. Specs that
+  name no version (`gromacs ^openmpi`, `osu-micro-benchmarks ^openmpi`) still
+  resolve to the newer pinned version, which is already installed; the extra
+  version is used only where a spec names it.
+- **Lines with a dependency clause (`^`) or compiler (`%`) are added as roots
+  only.** No package requirement is derived from them.
+- Already-installed packages are reused. A re-run with more lines adds them
+  and removes nothing.
+
+**Additional MPICH versions** (space-separated, default `3.4.3`) installs each
+version next to the default `mpich@4.2.2`, with an
+`osu-micro-benchmarks ^mpich@<version>` build for testing. They use the
+default MPICH's device, network and PMI. On a cluster whose Slurm offers PMIx,
+that is `pmi=pmix`. MPICH 3.4 has PMIx support for the ch4 device, and with
+`--with-pmix` it replaces its built-in PMI and process manager (its
+`configure.ac`), so it launches with `srun --mpi=pmix` like 4.2.2. The
+`MPIR_CVAR_PMI_VERSION` set in every MPICH module does not exist in 3.4 and is
+ignored there. Its module is `mpich/3.4.3-gcc-14.2.0`, and `module load mpich`
+still loads 4.2.2.
+
+The testbed's `07-test-stack.sh` checks each of these:
+
+- Each MPI module version: compile, a multi-node hello world (which also checks the library version), and OSU latency and bandwidth.
+- `module load mpich` still loads the newest version.
+- Apptainer: pulls `docker://busybox` to a SIF and runs it on a compute node as the user.
+- CMake: the version is at least 3.23, and a project configures and builds with gcc 14.
+- Git: a commit in a new repository works; git-gui and gitk are installed, and gitk's wish binary exists.
+- git-lfs: a file is stored as an LFS pointer.
+
 ## Module names in a GPU build
 
 A GPU environment holds a `~cuda` and a `+cuda` build of the same
@@ -602,6 +660,11 @@ testbed/                  virtual Ubuntu 22.04 Slurm cluster (LXD) for developin
 - **Module flavour is Tcl.** If the site standard is Lmod, flip the template's
   `modules.default.enable` to `[lmod]` and add a `core_compilers` list — Lmod
   needs it to build its hierarchy.
+- **NAMD is not built.** Spack's `namd` needs the NAMD source tarball, which
+  is distributed only after registering at the UIUC site, so it cannot be
+  fetched automatically. Once the tarball is on the cluster it can be added as
+  an additional package (for example `namd@3.0.3`, with the tarball placed in
+  a Spack source mirror). Deferred for now.
 - **Deferred enhancements:** a GPU-aware OSU build (`-d cuda`) for device-buffer
   bandwidth numbers, and cuFFTMp to let GROMACS spread PME across multiple GPUs.
 

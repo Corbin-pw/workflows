@@ -361,6 +361,42 @@ permissions: ['*']
               organisations. The installation is pinned to conda-forge, and the
               name 'defaults' is re-pointed at conda-forge. Users' environments
               and package caches go to ~/.conda.
+          software_header:
+            type: header
+            text: Additional software
+            size: 14
+          extra_specs:
+            type: editor
+            label: Additional Spack packages
+            description: One Spack spec per line; each gets a module. Any package your Spack mirrors offer.
+            default: |
+              # One Spack spec per line, e.g.  cmake@3.31   hdf5 +mpi ^openmpi   git +tcltk
+              # Containers: apptainer runs unprivileged (user namespaces), no setuid binary.
+              apptainer
+              cmake
+              # git-gui and gitk need Tk; they open on an X display (ssh -X or a desktop session).
+              git +tcltk
+              git-lfs
+            tooltip: >-
+              Each line is added to the environment as a root and gets a
+              module. Variants on a line (git +tcltk) become a requirement on
+              that package, so a dependency elsewhere in the stack uses the
+              same build rather than a second copy. A version of a package the
+              stack already pins (openmpi@4.1.6) is installed alongside the
+              pinned one; the pinned version stays the default. Packages
+              already installed are reused, nothing is removed.
+          mpich_extra_versions:
+            type: string
+            label: Additional MPICH versions
+            description: Space-separated, installed next to the default MPICH (4.2.2), each with OSU benchmarks.
+            default: '3.4.3'
+            optional: true
+            tooltip: >-
+              For software certified against, or sites that specify, MPICH 3
+              ("mpich3"). Built with the same device, network and PMI as the
+              default MPICH, so it launches the same way (srun). Its module is
+              mpich/<version>-gcc-<version>; `module load mpich` still gives
+              the default version.
           overrides_header:
             type: header
             text: Manual overrides (advanced — all three together or none)
@@ -459,6 +495,7 @@ jobs:
           service_python_env="${{ inputs.service.python_env }}"
           service_python_version="${{ inputs.service.python_version }}"
           service_miniforge="${{ inputs.service.miniforge }}"
+          service_mpich_extra_versions="${{ inputs.service.mpich_extra_versions }}"
           service_module_root="${{ inputs.service.module_root }}"
           service_flat_modules="${{ inputs.service.flat_modules }}"
           service_login_hook="${{ inputs.service.login_hook }}"
@@ -484,11 +521,15 @@ jobs:
           externals_head="${PWD}/externals.head.yaml"
           externals_compute="${PWD}/externals.compute.yaml"
           python_envs_file="${PWD}/python-envs.txt"
+          extra_specs_file="${PWD}/extra-specs.txt"
           EOF
           # Multi-line, so it travels as a file rather than through inputs.sh.
           cat > python-envs.txt <<'PYENVS'
           ${{ inputs.service.python_env_specs }}
           PYENVS
+          cat > extra-specs.txt <<'EXTRASPECS'
+          ${{ inputs.service.extra_specs }}
+          EXTRASPECS
           # Remove empty variables
           sed -i '/=\s*$\|=undefined\s*$/d' inputs.sh
           sed -i '/=""/d' inputs.sh

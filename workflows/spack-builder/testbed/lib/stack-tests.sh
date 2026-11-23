@@ -99,23 +99,33 @@ say "Compiler module"
 check "gcc module present (${GCC_MOD:-none})" test -n "$GCC_MOD"
 check "gcc module gives gcc 14" bash -c "module load $GCC_MOD && gcc --version | head -1 | grep -q ' 14\.'"
 
+# Every CPU module of each MPI, not just the first: with an extra version
+# installed (mpich 3.4.3 beside 4.2.2) `module -t avail mpich` lists both, and
+# taking the first would have silently tested 3.4.3 in place of the default.
 for M in openmpi mpich intel-oneapi-mpi; do
   say "$M"
-  MOD="$(modname "$M")"
-  check "$M: module present (${MOD:-none})" test -n "$MOD"
-  [ -n "$MOD" ] || continue
-  clean_env; module load "$GCC_MOD" "$MOD"; LOADED="$MOD"
-  check "$M: mpicc compiles with gcc 14" bash -c "mpicc --version 2>&1 | head -1 | grep -q ' 14\.' && mpicc -o hello_$M hello.c"
-  launchers="$M"; [ "$M" = openmpi ] && launchers="openmpi openmpi-mpirun"
-  for L in $launchers; do
-    check "$M: hello, ${N1} nodes x ${PPN} ranks via ${L}" bash -c "$(declare -f launch ranks_ok); N1=$N1 PPN=$PPN; launch $L $N1 $PPN ./hello_$M > hello_$L.out 2>&1; cat hello_$L.out; ranks_ok hello_$L.out"
+  MODS="$(module -t avail "$M" 2>&1 | grep -E -e "^$M/." | grep -vE -e '-cuda-|-cuda$' | sort -u)"
+  check "$M: module present (${MODS:-none})" test -n "$MODS"
+  for MOD in $MODS; do
+    V="${MOD#*/}"; V="${V%%-*}"; T="${M}-${V}"
+    clean_env; module load "$GCC_MOD" "$MOD"; LOADED="$MOD"
+    check "$MOD: mpicc compiles with gcc 14" bash -c "mpicc --version 2>&1 | head -1 | grep -q ' 14\.' && mpicc -o hello_$T hello.c"
+    launchers="$M"; [ "$M" = openmpi ] && launchers="openmpi openmpi-mpirun"
+    for L in $launchers; do
+      check "$MOD: hello, ${N1} nodes x ${PPN} ranks via ${L}" bash -c "$(declare -f launch ranks_ok); N1=$N1 PPN=$PPN; launch $L $N1 $PPN ./hello_$T > hello_${L}_$V.out 2>&1; cat hello_${L}_$V.out; grep -qF '${V%.*}' hello_${L}_$V.out || { echo 'library version is not ${V%.*}'; exit 1; }; ranks_ok hello_${L}_$V.out"
+    done
+    OSU="$(spack -e "$ENV_DIR" find --format '{prefix}' "osu-micro-benchmarks ~cuda ^$M@$V" 2>/dev/null | head -1)"
+    if [ -n "$OSU" ]; then
+      B="$OSU/libexec/osu-micro-benchmarks/mpi/pt2pt"
+      check "$MOD: osu_latency between nodes" bash -c "$(declare -f launch); launch $M 2 1 $B/osu_latency -m 8:1048576 > osu_lat_$T.out 2>&1; cat osu_lat_$T.out; grep -qE '^1048576' osu_lat_$T.out"
+      check "$MOD: osu_bw between nodes"      bash -c "$(declare -f launch); launch $M 2 1 $B/osu_bw -m 1048576:4194304 > osu_bw_$T.out 2>&1; cat osu_bw_$T.out; grep -qE '^4194304' osu_bw_$T.out"
+    else R+=("FAIL  $MOD: no osu-micro-benchmarks built against it"); fi
   done
-  OSU="$(spack -e "$ENV_DIR" find --format '{prefix}' "osu-micro-benchmarks ~cuda ^$M" 2>/dev/null | head -1)"
-  if [ -n "$OSU" ]; then
-    B="$OSU/libexec/osu-micro-benchmarks/mpi/pt2pt"
-    check "$M: osu_latency between nodes" bash -c "$(declare -f launch); launch $M 2 1 $B/osu_latency -m 8:1048576 > osu_lat_$M.out 2>&1; cat osu_lat_$M.out; grep -qE '^1048576' osu_lat_$M.out"
-    check "$M: osu_bw between nodes"      bash -c "$(declare -f launch); launch $M 2 1 $B/osu_bw -m 1048576:4194304 > osu_bw_$M.out 2>&1; cat osu_bw_$M.out; grep -qE '^4194304' osu_bw_$M.out"
-  else R+=("FAIL  $M: no osu-micro-benchmarks in the environment"); fi
+  # `module load <name>` must still give the pinned (newest) version.
+  if [ "$(printf '%s\n' $MODS | wc -l)" -gt 1 ]; then
+    clean_env
+    check "$M: 'module load $M' picks the newest ($(printf '%s\n' $MODS | sort -V | tail -1))" bash -c "module load $M && module -t list 2>&1 | grep -qx '$(printf '%s\n' $MODS | sort -V | tail -1)'"
+  fi
 done
 
 say "GROMACS: a ~17k-atom water box, minimised, then 2000 MD steps per MPI"
@@ -287,6 +297,64 @@ fi
 # ============================================================================
 # Environments are <name>-env modules written by build-python-envs.sh (not
 # Spack's own py-* package modules).
+# ============================================================================
+# Additional software (service_extra_specs), tested when it is in the environment
+# ============================================================================
+in_env() { grep -qE "^\s*- ['\"]?$1( |['\"]|\$)" "$ENV_DIR/spack.yaml"; }
+if in_env apptainer || in_env cmake || in_env git || in_env git-lfs; then
+  say "Additional software"
+  # A tool from the stack, not the OS copy: the OS has git and cmake too.
+  from_stack() { case "$(command -v "$1")" in /usr/*|/bin/*|"") echo "$1 resolves to '$(command -v "$1")', not the stack"; return 1;; esac; command -v "$1"; }
+  if in_env apptainer; then
+    AMOD="$(modname apptainer)"
+    check "apptainer: module present (${AMOD:-none})" test -n "$AMOD"
+    if [ -n "$AMOD" ]; then
+      clean_env; module load "$AMOD"; LOADED="$AMOD"
+      check "apptainer: runs from the stack, no setuid starter" bash -c "$(declare -f from_stack); from_stack apptainer && apptainer --version && ! find \"\$(dirname \"\$(dirname \"\$(command -v apptainer)\")\")/libexec\" -name 'starter-suid' -perm -4000 2>/dev/null | grep -q ."
+      # Pulled on the login node, run on a compute node as the user: the
+      # unprivileged (user-namespace) path, which is the only one installed.
+      check "apptainer: build a SIF from docker://busybox, run it on a compute node as $(id -un)" bash -c "set -e
+        apptainer pull --force busybox.sif docker://busybox:1.36 >apptainer-build.log 2>&1 || { tail -5 apptainer-build.log; exit 1; }
+        out=\$(srun -N1 -n1 -t 5 apptainer exec busybox.sif sh -c 'echo uid=\$(id -u) host=\$(hostname); head -1 /etc/os-release 2>/dev/null; busybox | head -1')
+        echo \"\$out\"; echo \"\$out\" | grep -q \"uid=$(id -u) \" && echo \"\$out\" | grep -qi busybox"
+    fi
+  fi
+  if in_env cmake; then
+    CMOD="$(modname cmake)"
+    check "cmake: module present (${CMOD:-none})" test -n "$CMOD"
+    if [ -n "$CMOD" ]; then
+      clean_env; module load "$GCC_MOD" "$CMOD"; LOADED="$CMOD"
+      mkdir -p cmk && printf 'cmake_minimum_required(VERSION 3.23)\nproject(hi C)\nadd_executable(hi hi.c)\n' > cmk/CMakeLists.txt && printf '#include <stdio.h>\nint main(void){puts("cmake ok");return 0;}\n' > cmk/hi.c
+      check "cmake: version >= 3.23 and a project builds with gcc 14" bash -c "$(declare -f from_stack); set -e; from_stack cmake; v=\$(cmake --version | head -1 | awk '{print \$3}'); echo \"cmake \$v\"; printf '3.23\n%s\n' \"\$v\" | sort -V -C
+        cmake -S cmk -B cmk/build -DCMAKE_C_COMPILER=gcc >cmk.log 2>&1 || { tail -5 cmk.log; exit 1; }; grep -E 'C compiler identification' cmk.log
+        cmake --build cmk/build >>cmk.log 2>&1 && ./cmk/build/hi"
+    fi
+  fi
+  if in_env git || in_env git-lfs; then
+    GMOD="$(modname git '' '-cuda-|^git-lfs/')"; LMOD_LFS="$(modname git-lfs)"
+    check "git: module present (${GMOD:-none})" test -n "$GMOD"
+    in_env git-lfs && check "git-lfs: module present (${LMOD_LFS:-none})" test -n "$LMOD_LFS"
+    if [ -n "$GMOD" ]; then
+      clean_env; module load $GMOD $LMOD_LFS; LOADED="$GMOD"
+      check "git: from the stack; commit and log in a new repository" bash -c "$(declare -f from_stack); set -e; from_stack git; git --version
+        rm -rf gitrepo; git init -q gitrepo; cd gitrepo; echo hi > a.txt; git add a.txt
+        git -c user.name=tb -c user.email=tb@example.invalid commit -qm first; git log --oneline | grep -q first"
+      if grep -qE "git ?\+tcltk|git.*tcltk" "$ENV_DIR/spack.yaml"; then
+        # The GUIs need an X display to open, so check they are installed and
+        # their Tk interpreter is the stack's; run them with ssh -X or a desktop.
+        check "git GUI: git-gui and gitk installed, and gitk's Tk interpreter (wish) exists" bash -c "set -e; ls \"\$(git --exec-path)/git-gui\"; g=\$(command -v gitk); echo \$g; w=\$(grep -m1 -oE '/[^ \"]*/wish[0-9.]*' \$g); echo \"wish: \$w\"; test -x \"\$w\""
+      fi
+      if [ -n "$LMOD_LFS" ]; then
+        check "git-lfs: tracks and stores a file as an LFS pointer" bash -c "set -e; git lfs version; cd gitrepo
+          git lfs install --local >/dev/null; git lfs track '*.bin' >/dev/null; head -c 100000 /dev/urandom > blob.bin; git add .gitattributes blob.bin
+          git -c user.name=tb -c user.email=tb@example.invalid commit -qm lfs; git lfs ls-files | grep -q blob.bin
+          git show HEAD:blob.bin | grep -q '^version https://git-lfs'"
+      fi
+    fi
+  fi
+  clean_env
+fi
+
 PY_MODS="$(module -t avail 2>&1 | grep -E -e '^[A-Za-z0-9._]+-env/$' | tr -d / | sort -u | tr '\n' ' ')"
 if [ -n "$PY_MODS" ]; then
   say "Python environments: $PY_MODS"
