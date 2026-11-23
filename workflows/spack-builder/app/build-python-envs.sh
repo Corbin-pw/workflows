@@ -44,6 +44,10 @@ if [ "${service_python_env:-false}" = "true" ]; then
     local r; r="$(printf '%s' "$1" | sed -E 's/\[.*//; s/[<>=!~;].*//' | tr 'A-Z' 'a-z')"
     case "$r" in
       biopython) echo Bio ;; scikit-learn) echo sklearn ;; fair-esm) echo esm ;;
+      # EvolutionaryScale's esm: its top level imports almost nothing, while
+      # esm.sdk needs httpx, which esm 3.2.1 does not declare -- import the
+      # modules users actually reach for.
+      esm) echo esm.models.esm3; echo esm.sdk.api ;;
       jax-cuda12-plugin|jax-cuda13-plugin) echo jax ;; openmm-cuda-1*) echo openmm ;;
       pyyaml) echo yaml ;; pillow) echo PIL ;; opencv-python*) echo cv2 ;;
       *) printf '%s\n' "$r" | tr '-' '_' ;;

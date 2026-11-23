@@ -368,7 +368,7 @@ Anaconda's channels. The default list:
 
 ```
 ml:   torch jax[cuda12] transformers numpy biopython mdtraj biotite scikit-learn openmm[cuda12]
-esm3: esm
+esm3: esm httpx
 ```
 
 Why two environments, found by resolving the list for Python 3.11 on
@@ -378,6 +378,9 @@ manylinux 2.35 x86_64 before building anything:
   0.18, which is discontinued and was built for torch 2.3. In one environment
   every user gets a January-2025 Transformers, or (forcing a current one) the
   resolver silently drops ESM-3 to 3.0.3.
+- `esm` 3.2.1 imports `httpx` in its SDK (`esm.sdk.api`) without declaring it;
+  the line adds it, and the build's import check covers `esm.models.esm3` and
+  `esm.sdk.api`, not just the top-level package.
 - `fair-esm` (ESM-2) and `esm` (ESM-3) both install the import name `esm`.
   ESM-2 is served by Transformers instead (`facebook/esm2_*`).
 

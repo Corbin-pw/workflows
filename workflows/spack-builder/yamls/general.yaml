@@ -337,8 +337,9 @@ permissions: ['*']
               # ESM-2 comes with transformers (facebook/esm2_* models). ESM-3 (esm)
               # gets its own environment: it caps transformers below 4.48.2 and
               # pulls torchtext, which would hold the whole ml environment back.
+              # httpx: esm 3.2.1's SDK imports it without declaring it.
               ml: torch jax[cuda12] transformers numpy biopython mdtraj biotite scikit-learn openmm[cuda12]
-              esm3: esm
+              esm3: esm httpx
             hidden: ${{ !inputs.service.python_env }}
             ignore: ${{ .hidden }}
             tooltip: >-
