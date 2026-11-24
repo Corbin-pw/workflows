@@ -37,7 +37,11 @@ FAIL=0
 # ---------------------------------------------------------------------------
 if [ "${service_python_env:-false}" = "true" ]; then
   PYVER="${service_python_version:-3.11}"
-  PY_PREFIX="$(spack -e "$ENV_DIR" find --format '{prefix}' "python@${PYVER}" 2>/dev/null | grep "^${SPACK_ROOT}/opt/" | head -1)"
+  # Spack-built, not a system external in /usr -- in this Spack's install tree
+  # or in an existing Spack chained as an upstream (service_existing_spack).
+  UP_TREE="$(sed -n 's/^ *install_tree: *//p' "$SPACK_ROOT/etc/spack/upstreams.yaml" 2>/dev/null | head -1)"
+  PY_PREFIX="$(spack -e "$ENV_DIR" find --format '{prefix}' "python@${PYVER}" 2>/dev/null \
+    | grep -E "^(${SPACK_ROOT}/opt/${UP_TREE:+|${UP_TREE%/}/})" | head -1)"
   PYTHON="$(ls "$PY_PREFIX"/bin/python${PYVER} "$PY_PREFIX"/bin/python3 2>/dev/null | head -1)"
   [ -x "$PYTHON" ] || { echo "::error title=Error::No Spack-built python@${PYVER} in this environment (looked under ${PY_PREFIX:-<none>})" >&2; exit 1; }
   FULLVER="$("$PYTHON" -c 'import platform; print(platform.python_version())')"

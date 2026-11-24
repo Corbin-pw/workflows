@@ -279,12 +279,28 @@ fi
 # "$GCC_SPEC"` cannot be used here: once the compiler is registered below there
 # are two gcc@<version> entries -- the built package and the external entry that
 # points at its prefix -- and location fails with "matches multiple packages".
+# A Spack-built gcc lives in this Spack's install tree -- or, when an existing
+# Spack is chained as an upstream (service_existing_spack, controller.sh), in
+# that one's: `spack install` then reuses the upstream gcc and installs nothing
+# here. Accept both trees; never the system gcc in /usr.
+# `|| true` on each: under `set -euo pipefail` an empty lookup (grep exit 1)
+# made the assignment itself fail and ended the run with no message at all
+# (testbed run 00020, the first build against an upstream).
+GCC_TREES="${SPACK_ROOT}/opt/"
+UPSTREAM_TREE="$(sed -n 's/^ *install_tree: *//p' "$SPACK_ROOT/etc/spack/upstreams.yaml" 2>/dev/null | head -1 || true)"
+[ -n "$UPSTREAM_TREE" ] && GCC_TREES="$GCC_TREES ${UPSTREAM_TREE%/}/"
+in_gcc_trees() { local t; for t in $GCC_TREES; do case "$1" in "$t"*) return 0 ;; esac; done; return 1; }
 gcc_built_prefix() {
-  spack find --format '{prefix}' "$GCC_SPEC" 2>/dev/null | grep "^${SPACK_ROOT}/opt/" | head -1
+  local h p
+  spack find --format '{hash} {prefix}' "$GCC_SPEC" 2>/dev/null | while read -r h p; do
+    if in_gcc_trees "$p"; then echo "$p"; break; fi
+  done || true
 }
 gcc_built_hash() {
-  spack find --format '{hash} {prefix}' "$GCC_SPEC" 2>/dev/null \
-    | awk -v r="${SPACK_ROOT}/opt/" 'index($2, r) == 1 {print $1; exit}'
+  local h p
+  spack find --format '{hash} {prefix}' "$GCC_SPEC" 2>/dev/null | while read -r h p; do
+    if in_gcc_trees "$p"; then echo "$h"; break; fi
+  done || true
 }
 
 # The padding in templates/spack.yaml.in only reaches commands run IN the
@@ -315,10 +331,13 @@ fi
 # registered the external, "$GCC_SPEC" matches two packages and the push fails
 # (gce run ample-trout).
 GCC_HASH="$(gcc_built_hash)"
-spack buildcache push --unsigned --update-index --private --allow-missing "$MIRROR_NAME" "/$GCC_HASH" || true
+if [ -n "$GCC_HASH" ]; then
+  spack buildcache push --unsigned --update-index --private --allow-missing "$MIRROR_NAME" "/$GCC_HASH" || true
+fi
 
 GCC_PREFIX="$(gcc_built_prefix)"
-[ -n "$GCC_PREFIX" ] || { echo "::error title=Error::$GCC_SPEC not present under $SPACK_ROOT/opt after install" >&2; exit 1; }
+[ -n "$GCC_PREFIX" ] || { echo "::error title=Error::$GCC_SPEC not present under ${GCC_TREES// / or } after install" >&2; exit 1; }
+case "$GCC_PREFIX" in "$SPACK_ROOT"/*) : ;; *) log "Stack compiler taken from the existing Spack: $GCC_PREFIX" ;; esac
 
 # Register the built compiler as an external. REQUIRED, not cosmetic. Without it
 # the environment fails to concretize with
