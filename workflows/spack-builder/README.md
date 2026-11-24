@@ -450,13 +450,16 @@ that is `pmi=pmix`. MPICH 3.4 has PMIx support for the ch4 device, and with
 `--with-pmix` it replaces its built-in PMI and process manager (its
 `configure.ac`), so it launches with `srun --mpi=pmix` like 4.2.2. The
 `MPIR_CVAR_PMI_VERSION` set in every MPICH module does not exist in 3.4 and is
-ignored there. Its module is `mpich/3.4.3-gcc-14.2.0`, and `module load mpich`
+ignored there. Before it was added, a scratch build of 3.4.3 (ch4:ofi,
+`--with-pmix`) compiled and linked cleanly with gcc 14.2, libfabric 2.6.0 and
+PMIx. That build covered compiling only; the multi-node launch is checked by
+`07-test-stack.sh` (passed on the testbed). Its module is `mpich/3.4.3-gcc-14.2.0`, and `module load mpich`
 still loads 4.2.2.
 
 The testbed's `07-test-stack.sh` checks each of these:
 
 - Each MPI module version: compile, a multi-node hello world (which also checks the library version), and OSU latency and bandwidth.
-- `module load mpich` still loads the newest version.
+- `module load mpich` still loads the newest version. The check compares versions, because one version can have more than one module (see below).
 - Apptainer: pulls `docker://busybox` to a SIF and runs it on a compute node as the user.
 - CMake: the version is at least 3.23, and a project configures and builds with gcc 14.
 - Git: a commit in a new repository works; git-gui and gitk are installed, and gitk's wish binary exists.
@@ -660,6 +663,15 @@ testbed/                  virtual Ubuntu 22.04 Slurm cluster (LXD) for developin
 - **Module flavour is Tcl.** If the site standard is Lmod, flip the template's
   `modules.default.enable` to `[lmod]` and add a `core_compilers` list — Lmod
   needs it to build its hierarchy.
+- **A CPU-only run and a GPU run into the same flat module folder leave two
+  modules per version.** The CPU-only run names modules without a hash
+  (`mpich/4.2.2-gcc-14.2.0`). The GPU run adds a hash to every name
+  (`mpich/4.2.2-gcc-14.2.0-fck2bzw`), and its CPU builds are different builds,
+  because `cuda_arch` is set for all packages. Both modules work, and
+  `module load mpich` still gives 4.2.2, but which of the two Lmod picks is not
+  defined. This was seen on the testbed after the GPU run. Until updating
+  in place is handled (planned), use one build type per module folder, or
+  remove the older run's modules.
 - **NAMD is not built.** Spack's `namd` needs the NAMD source tarball, which
   is distributed only after registering at the UIUC site, so it cannot be
   fetched automatically. Once the tarball is on the cluster it can be added as

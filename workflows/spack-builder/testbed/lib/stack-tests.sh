@@ -121,10 +121,14 @@ for M in openmpi mpich intel-oneapi-mpi; do
       check "$MOD: osu_bw between nodes"      bash -c "$(declare -f launch); launch $M 2 1 $B/osu_bw -m 1048576:4194304 > osu_bw_$T.out 2>&1; cat osu_bw_$T.out; grep -qE '^4194304' osu_bw_$T.out"
     else R+=("FAIL  $MOD: no osu-micro-benchmarks built against it"); fi
   done
-  # `module load <name>` must still give the pinned (newest) version.
-  if [ "$(printf '%s\n' $MODS | wc -l)" -gt 1 ]; then
+  # `module load <name>` must still give the newest VERSION (mpich 4.2.2, not
+  # an extra 3.4.3). Compared by version, not by full module name: one version
+  # can have several modules (a CPU-only run names them without a hash, a GPU
+  # run with one), and which of those Lmod picks says nothing about versions.
+  NV="$(for x in $MODS; do v="${x#*/}"; echo "${v%%-*}"; done | sort -uV | tail -1)"
+  if [ "$(for x in $MODS; do v="${x#*/}"; echo "${v%%-*}"; done | sort -u | wc -l)" -gt 1 ]; then
     clean_env
-    check "$M: 'module load $M' picks the newest ($(printf '%s\n' $MODS | sort -V | tail -1))" bash -c "module load $M && module -t list 2>&1 | grep -qx '$(printf '%s\n' $MODS | sort -V | tail -1)'"
+    check "$M: 'module load $M' gives the newest version ($NV)" bash -c "module load $M || exit 1; got=\$(module -t list 2>&1 | grep -E '^$M/'); echo \"loaded: \$got\"; v=\${got#*/}; [ \"\${v%%-*}\" = '$NV' ]"
   fi
 done
 
