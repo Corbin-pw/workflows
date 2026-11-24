@@ -111,6 +111,21 @@ ensure_site_dir "$BUILDCACHE_PATH"
 SPACK_UNMANAGED=0
 spack_usable() { [ -x "$SPACK_ROOT/bin/spack" ] && [ -f "$SPACK_ROOT/share/spack/setup-env.sh" ]; }
 
+# Only a Spack root THIS workflow created is changed: re-pointed to another
+# tag, given our site config (packages.yaml, mirrors), built into. A Spack
+# someone else maintains is never touched -- it is chained read-only instead
+# (service_existing_spack, step 1b). The marker is written once the root is
+# ours; roots from before the marker existed are recognised by the site
+# packages.yaml this script copies in on every run.
+OWN_MARKER="$SPACK_ROOT/.spack-builder"
+spack_is_ours() {
+  [ -f "$OWN_MARKER" ] || grep -qs 'site-scope baseline, copied into \$SPACK_ROOT/etc/spack by' "$SPACK_ROOT/etc/spack/packages.yaml"
+}
+if spack_usable && ! spack_is_ours; then
+  echo "::error title=Error::$SPACK_ROOT holds a Spack this workflow did not install (no $OWN_MARKER). It will not be re-pointed to $SPACK_VERSION or reconfigured. To build on its packages, enter $SPACK_ROOT under 'Existing Spack to build on' and choose a new 'Spack root' (for example /software/spack-builder). To let this workflow take it over instead, create $OWN_MARKER." >&2
+  exit 1
+fi
+
 if [ -d "$SPACK_ROOT/.git" ] && ! git -C "$SPACK_ROOT" rev-parse -q --verify HEAD >/dev/null 2>&1; then
   # Typically a clone interrupted after .git was created.
   echo "::error title=Error::$SPACK_ROOT has a .git directory but is not a readable git repository (an interrupted clone?). Delete $SPACK_ROOT or set 'Spack root' to another path." >&2
@@ -150,6 +165,8 @@ else
   fi
 fi
 
+[ -f "$OWN_MARKER" ] || printf 'Spack root managed by the spack-builder workflow (created or adopted %s by %s).\n' "$(date -Is)" "$(id -un)" > "$OWN_MARKER"
+
 # shellcheck disable=SC1091
 . "$SPACK_ROOT/share/spack/setup-env.sh"
 SPACK_SEEN="$(spack --version)"
@@ -162,6 +179,96 @@ case "$SPACK_SEEN" in
 esac
 if [ "$SPACK_UNMANAGED" = 1 ] && [ "v${SPACK_SEEN%% *}" != "$SPACK_VERSION" ]; then
   echo "::warning::Spack version is $SPACK_SEEN, not the requested $SPACK_VERSION: $SPACK_ROOT is not a git clone, so it was used as found" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# 1b. An existing Spack to build on (service_existing_spack), chained READ-ONLY
+#     as a Spack upstream: its installs are visible to `spack find`, can be
+#     reused by the concretizer, and are never modified -- new builds go into
+#     this Spack root. Spack itself documents the limits: upstreams are not
+#     locked (do not install into the existing Spack while this runs) and their
+#     packages must not be uninstalled while ours depend on them.
+#     Written as its own site file, so clearing the input removes the chain.
+# ---------------------------------------------------------------------------
+UPSTREAMS_FILE="$SPACK_ROOT/etc/spack/upstreams.yaml"
+UPSTREAMS_TAG="# written by spack-builder controller.sh (service_existing_spack)"
+EXISTING="${service_existing_spack:-}"
+EXISTING="${EXISTING%/}"
+if [ -z "$EXISTING" ]; then
+  if grep -qsF "$UPSTREAMS_TAG" "$UPSTREAMS_FILE"; then
+    rm -f "$UPSTREAMS_FILE"; log "Existing Spack: none; removed the previous upstream chain"
+  fi
+else
+  log "Existing Spack to build on: $EXISTING (read-only upstream)"
+  if [ "$(readlink -f "$EXISTING")" = "$(readlink -f "$SPACK_ROOT")" ]; then
+    echo "::error title=Error::'Existing Spack to build on' is the Spack root itself ($SPACK_ROOT). Choose a different Spack root for the new builds." >&2
+    exit 1
+  fi
+  # The upstream entry needs the install tree, i.e. the directory holding
+  # .spack-db: a Spack root's opt/spack by default, a custom install_tree:root
+  # from its config.yaml, or the tree itself if that is what was entered. With
+  # padded_length the database sits at the end of the __spack_path_placeholder__
+  # chain, so that is followed too.
+  candidates=("$EXISTING" "$EXISTING/opt/spack")
+  for cfg in "$EXISTING/etc/spack/config.yaml" "$EXISTING/etc/spack/site/config.yaml"; do
+    r="$(sed -n '/^ *install_tree:/,/^ *[a-z_]*:$/s/^ *root: *//p' "$cfg" 2>/dev/null | head -1 | tr -d "'\"" || true)"
+    [ -n "$r" ] && candidates+=("${r//\$spack/$EXISTING}")
+  done
+  TREE=""
+  for d in "${candidates[@]}"; do
+    while [ -d "$d" ]; do
+      [ -f "$d/.spack-db/index.json" ] && { TREE="$d"; break 2; }
+      n="$(ls -d "$d"/__spack_path_placeh* 2>/dev/null | head -1 || true)"; [ -n "$n" ] || break; d="$n"
+    done
+  done
+  if [ -z "$TREE" ]; then
+    echo "::error title=Error::No Spack install database (.spack-db/index.json) found for $EXISTING. Enter the existing Spack's root or its install tree. Looked in: ${candidates[*]}" >&2
+    exit 1
+  fi
+  # Spack v1 reads upstream databases v6-v8 as they are (Spack v0.16 onwards);
+  # an older one would need `spack reindex`, which is never run on an upstream.
+  read -r DBV NINST NEXPL < <(python3 - "$TREE/.spack-db/index.json" <<'PY'
+import json, sys
+db = json.load(open(sys.argv[1]))["database"]
+inst = db.get("installs", {})
+live = [r for r in inst.values() if r.get("installed")]
+print(db.get("version", "?"), len(live), sum(1 for r in live if r.get("explicit")))
+PY
+) || true
+  case "$DBV" in
+    6|7|8) : ;;
+    *) echo "::error title=Error::The install database at $TREE is version $DBV; this Spack reads versions 6-8 (Spack v0.16 or newer) as an upstream." >&2; exit 1 ;;
+  esac
+  [ -r "$TREE/.spack-db/index.json" ] || { echo "::error title=Error::$(id -un) cannot read $TREE/.spack-db/index.json" >&2; exit 1; }
+  mkdir -p "$SPACK_ROOT/etc/spack"
+  # Spack writes no modules for packages it takes from an upstream. If the
+  # existing Spack keeps a module index, name it, so modules built here can
+  # autoload the existing modules of upstream dependencies (those must then be
+  # on users' MODULEPATH, as they already are where that Spack is in use).
+  UP_TCL=""
+  for m in "$EXISTING/share/spack/modules" "$EXISTING/modulefiles"; do
+    if [ -f "$m/module-index.yaml" ]; then UP_TCL="$m"; break; fi
+  done
+  {
+    printf '%s\nupstreams:\n  existing:\n    install_tree: %s\n' "$UPSTREAMS_TAG" "$TREE"
+    if [ -n "$UP_TCL" ]; then printf '    modules:\n      tcl: %s\n' "$UP_TCL"; fi
+  } > "$UPSTREAMS_FILE"
+  if [ -n "$UP_TCL" ]; then echo "module index : $UP_TCL"; else echo "module index : none found (modules built here will not autoload modules of packages taken from it)"; fi
+  echo "install tree : $TREE (database v$DBV, $NINST installed, $NEXPL explicit)"
+  # What is already there, for the log: the explicitly installed packages are
+  # the site's own stack (e.g. gromacs per MPI), which a version override can
+  # rebuild at a new version beside them.
+  python3 - "$TREE/.spack-db/index.json" <<'PY' | sort | uniq -c | sort -rn | head -40 | sed 's/^/  explicit: /' || true
+import json, sys
+for r in json.load(open(sys.argv[1]))["database"]["installs"].values():
+    if r.get("installed") and r.get("explicit"):
+        s = r["spec"]
+        if "name" not in s:  # pre-0.17 databases: {"<name>": {...}}
+            n = next(iter(s)); s = dict(s[n], name=n)
+        print("%s@%s" % (s.get("name"), s.get("version")))
+PY
+  echo "Packages taken from it get no module here: Spack only writes modules for"
+  echo "what it installs itself. Users keep loading those from the existing tree."
 fi
 
 # ---------------------------------------------------------------------------

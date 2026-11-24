@@ -405,6 +405,40 @@ and environments/package caches in `~/.conda`. conda, mamba and conda-forge are
 free to use; Anaconda's `defaults` channel needs a paid licence for larger
 organisations, so it is never configured.
 
+## Updating and extending an existing install
+
+**Re-running the workflow against the same Spack root extends it.**
+- Every run builds a fresh environment from the form, so you can add packages or change versions freely.
+- Installs from earlier runs stay on disk and are reused when they match.
+- Modules are refreshed without `--delete-tree`, so earlier modules stay too.
+- Nothing is uninstalled.
+
+New versions are installed beside the old ones:
+
+- **Packages the stack does not pin** (anything under Additional Spack packages): change the version on its line, for example `cmake@3.31` to `cmake@4.1`. The next run installs it next to the old one.
+- **Packages the stack pins** (the MPIs): add a line with the new version, for example `openmpi@5.0.11`. The pin becomes `one_of`, so both versions are installed (see "Additional software" below).
+
+**The newest version becomes the module default.**
+- After each run, `set-module-defaults.py` writes `module-version <name>/<module> default` into `<name>/.modulerc` for every package that has more than one version. Older versions still load by their full name.
+- Several modules of one version, such as GROMACS per MPI, are alternatives rather than an update, so the script does not choose a default among them.
+- The Python environments and Miniforge set their own defaults in `.version`, and the script leaves them alone.
+
+**Only a Spack root this workflow created is changed.**
+- The workflow re-points its Spack root to the requested tag and writes site config there (`packages.yaml`, mirrors). It must not do that to a Spack someone else maintains.
+- A root it created carries a `.spack-builder` marker. Roots from before the marker existed are recognised by the `packages.yaml` the workflow copies in on every run.
+- A Spack root without either is refused, and the error says what to do instead.
+
+**Building on a Spack you did not create: Existing Spack to build on.**
+- Enter that Spack's root, or its install tree. It is chained read-only as a Spack upstream (`etc/spack/upstreams.yaml` in the new Spack root), and new builds go into the Spack root, which must be a different path.
+- The controller log shows its install database version and lists its explicitly installed packages, such as the site's GROMACS builds. That list is what a later run can rebuild at a new version beside them.
+- Clearing the input removes the chain.
+
+Limits of upstreams, from Spack's own documentation:
+- Spack writes **no modules** for packages it takes from an upstream. Users keep loading those from the existing module tree. If the existing Spack keeps a module index (`module-index.yaml`), it is configured, so modules built here can autoload the upstream ones.
+- Upstream packages are reused only where they match this stack's requirements: same target, gcc 14.2.0, the pinned versions and variants. Anything else is built fresh in the new root.
+- Upstreams are not locked. Do not install into, or uninstall from, the existing Spack while a run uses it.
+- Spack v1 reads install databases v6 to v8 (Spack v0.16 and newer) from an upstream without reindexing. Older databases are refused.
+
 ## Additional software and extra MPI versions
 
 **Additional Spack packages** is an editor with one Spack spec per line; `#`

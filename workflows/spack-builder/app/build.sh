@@ -526,6 +526,12 @@ else
   echo "  none found"
 fi
 
+# Re-runs install new versions beside the old ones; the newest version of each
+# package becomes its module default (.modulerc), the older ones stay loadable
+# by full name. See set-module-defaults.py.
+log "Module defaults: newest version of each package"
+spack python "$APP_DIR/set-module-defaults.py" "$MODULE_ROOT"
+
 # `spack arch` reports the LOGIN node, but the modules are written under the
 # spec's architecture -- and on a cross-architecture cluster, which is the case
 # this workflow exists for, those differ. Run moral-silkworm built x86_64_v3 and

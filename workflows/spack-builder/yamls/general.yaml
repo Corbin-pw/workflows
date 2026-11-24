@@ -210,6 +210,22 @@ permissions: ['*']
               Created with sudo when missing and handed to the user running the
               workflow; Spack itself never runs as root. ${HOME}/spack keeps
               everything in user space instead.
+              A re-run against a Spack root this workflow created extends it:
+              new packages and versions are added, nothing is removed. A Spack
+              root someone else maintains is refused; enter it below instead.
+          existing_spack:
+            type: string
+            label: Existing Spack to build on
+            description: Optional. Another Spack (its root or install tree), used read-only.
+            default: ''
+            optional: true
+            tooltip: >-
+              Chained as a Spack upstream: its installed packages are visible
+              and can be reused, and it is never modified. New builds go into
+              the Spack root above, which must be a different path. The log
+              lists what is already installed there. Its own modules are left
+              as they are. Needs a Spack from v0.16 on (install database v6-v8).
+              Do not install into or uninstall from it while this runs.
           buildcache_path:
             type: string
             label: Binary build cache
@@ -487,6 +503,7 @@ jobs:
           pw_endpoints_args="--name ${{ inputs.service.name }}-${PW_RUN_SLUG}"
           service_spack_version="${{ inputs.service.spack_version }}"
           service_install_prefix="${{ inputs.service.install_prefix }}"
+          service_existing_spack="${{ inputs.service.existing_spack }}"
           service_buildcache_path="${{ inputs.service.buildcache_path }}"
           service_build_jobs="${{ inputs.service.build_jobs }}"
           service_build_gpu="${{ inputs.service.build_gpu }}"
