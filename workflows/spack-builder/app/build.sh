@@ -506,7 +506,39 @@ if [ "$FLAT_MODULES" = "true" ]; then
   printf '%s\n' "$TARGET" > "$TARGET_STAMP"
   log "Modules: one flat folder at $MODULE_ROOT (target $TARGET)"
 fi
-spack -e "$ENV_DIR" module tcl refresh -y
+# Module names carry no hash (hash_length 0, GPU builds included), so the same
+# package version has the same module name in every run and a later run
+# updates it in place. Clashes Spack still finds -- two builds of an implicit
+# dependency that no projection tells apart -- give just those packages a hash
+# suffix and the refresh is retried; Spack checks before writing anything, so
+# a failed attempt changes nothing. Then modules left under an outdated name
+# for a build this refresh just wrote (the hashed names of earlier GPU runs)
+# are removed. See module-names.py.
+# The stamp lives in the module tree so its time comes from the same
+# filesystem (an NFS server's clock) as the modulefiles it is compared with.
+mkdir -p "$MODULE_ROOT"
+REFRESH_STAMP="$MODULE_ROOT/.refresh-stamp"; : > "$REFRESH_STAMP"; sleep 1
+for attempt in 1 2 3 4; do
+  if spack -e "$ENV_DIR" module tcl refresh -y > module-refresh.log 2>&1; then
+    tail -3 module-refresh.log
+    break
+  fi
+  # shellcheck disable=SC2207
+  # name@=version from each clashing <root>/<name>/<version>-... path, so only
+  # that version gets the suffix (python 3.14 clashing must not put a hash on
+  # the python 3.11 module users load).
+  clashing=($(sed -n 's/^.*file: *//p' module-refresh.log | awk -F/ '{v=$NF; sub(/-.*/, "", v); print $(NF-1) "@=" v}' | sort -u))
+  if [ "${#clashing[@]}" = 0 ] || [ "$attempt" = 4 ]; then
+    cat module-refresh.log >&2
+    echo "::error title=Error::module tcl refresh failed${clashing:+ (name clashes remain after $attempt attempts)}" >&2
+    rm -f "$REFRESH_STAMP"; exit 1
+  fi
+  log "Module name clashes in: ${clashing[*]} -- giving those a hash suffix (attempt $attempt)"
+  spack python "$APP_DIR/module-names.py" hash-for "$ENV_DIR/spack.yaml" "${clashing[@]}"
+done
+log "Removing modules left under outdated names for builds refreshed above"
+spack python "$APP_DIR/module-names.py" prune "$MODULE_ROOT" "$REFRESH_STAMP"
+rm -f "$REFRESH_STAMP"
 
 # Second line of defence against leaked search paths (see dedup_path above):
 # no modulefile may add or remove a directory that merely came from THIS

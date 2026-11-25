@@ -493,7 +493,7 @@ still loads 4.2.2.
 The testbed's `07-test-stack.sh` checks each of these:
 
 - Each MPI module version: compile, a multi-node hello world (which also checks the library version), and OSU latency and bandwidth.
-- `module load mpich` still loads the newest version. The check compares versions, because one version can have more than one module (see below).
+- `module load mpich` still loads the newest version.
 - Apptainer: pulls `docker://busybox` to a SIF and runs it on a compute node as the user.
 - CMake: the version is at least 3.23, and a project configures and builds with gcc 14.
 - Git: a commit in a new repository works; git-gui and gitk are installed, and gitk's wish binary exists.
@@ -508,11 +508,12 @@ the CPU projections name both identically, so `module tcl refresh` aborts with
 successful install, which is how `caring-warthog` managed to build and push the
 entire GPU stack and still fail.
 
-GPU builds therefore get two extra things, and CPU builds are untouched:
+GPU builds therefore get a `-cuda` suffix where it applies, and otherwise the
+same names as a CPU build:
 
 ```
-gromacs/2025.4-openmpi-5.0.10-cuda-<hash>     GPU build
-gromacs/2025.4-openmpi-5.0.10-<hash>          CPU build
+gromacs/2025.4-openmpi-5.0.10-cuda     GPU build
+gromacs/2025.4-openmpi-5.0.10          CPU build
 ```
 
 - a **`-cuda` suffix**, which means exactly one thing: *this package is
@@ -545,9 +546,30 @@ gromacs/2025.4-openmpi-5.0.10-<hash>          CPU build
   openmpi/5.0.10-gcc-14.2.0-cuda-uoyrl2w        openmpi+cuda
   mpich/4.2.2-gcc-14.2.0-embhosw                no CUDA anywhere
   ```
-- a **hash suffix** (`hash_length: 7`), because a suffix alone is not enough:
-  `pmix` and `prrte` each appear twice with *identical* variants, differing only
-  in which `hwloc` they were built against, and no projection can express that.
+- **`^hwloc+cuda` gets `-cuda` too.** `pmix` and `prrte` each appear twice with
+  *identical* variants, differing only in which `hwloc` they were built
+  against. This was first solved with a hash suffix (`hash_length: 7`) on
+  every GPU module, which gave each module a different name in a GPU run than
+  in a CPU run. One flat folder then held two modules per version (testbed,
+  2026-11-24). Names no longer depend on the run type, so a later run updates a
+  module in place.
+- **Anything that still clashes gets a hash, for that version only.** On the
+  testbed GPU stack that was four implicit dependencies (`gettext`, `krb5`,
+  `openssh`, a build-only `python@3.14.5`), each pulled in twice with
+  different dependency subtrees. `build.sh` reads the clashing names from the
+  failed refresh, gives just those `name@=version` a hash projection
+  (`module-names.py hash-for`) and retries. Spack checks for clashes before it
+  writes anything, so a failed attempt changes nothing.
+- **Hidden implicit modules (`hide_implicits`) are not an option on Ubuntu
+  22.04.** Its Lmod 6.6 aborts `module avail` and `module load` on the
+  `module-hide` lines Spack writes ("invalid command name module-hide"),
+  checked with `testbed/probes/module-naming-probe.sh`.
+
+After each refresh, `module-names.py prune` removes modules left under an
+outdated name for a build the refresh just wrote, identified by the `/hash`
+on the modulefile's header line (for example the hashed names of GPU runs
+from before this change). It never removes a different build, or a file
+Spack did not write.
 
 Spack picks the first projection whose constraint the spec satisfies, in the
 order they are written, with `all` reserved as the fallback — see
@@ -697,15 +719,6 @@ testbed/                  virtual Ubuntu 22.04 Slurm cluster (LXD) for developin
 - **Module flavour is Tcl.** If the site standard is Lmod, flip the template's
   `modules.default.enable` to `[lmod]` and add a `core_compilers` list — Lmod
   needs it to build its hierarchy.
-- **A CPU-only run and a GPU run into the same flat module folder leave two
-  modules per version.** The CPU-only run names modules without a hash
-  (`mpich/4.2.2-gcc-14.2.0`). The GPU run adds a hash to every name
-  (`mpich/4.2.2-gcc-14.2.0-fck2bzw`), and its CPU builds are different builds,
-  because `cuda_arch` is set for all packages. Both modules work, and
-  `module load mpich` still gives 4.2.2, but which of the two Lmod picks is not
-  defined. This was seen on the testbed after the GPU run. Until updating
-  in place is handled (planned), use one build type per module folder, or
-  remove the older run's modules.
 - **NAMD is not built.** Spack's `namd` needs the NAMD source tarball, which
   is distributed only after registering at the UIUC site, so it cannot be
   fetched automatically. Once the tarball is on the cluster it can be added as

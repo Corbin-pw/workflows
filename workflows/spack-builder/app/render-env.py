@@ -320,17 +320,26 @@ def main(argv):
     #     such a package keeps the MPI in its name; `+cuda` alone then catches
     #     the CUDA-aware MPIs themselves, which PROVIDE mpi rather than depend
     #     on it and so never match the first rule.
-    #   * a hash suffix, because a suffix alone is not sufficient: pmix and prrte
-    #     appear twice with IDENTICAL variants, differing only in which hwloc
-    #     they were built against, and no projection can express that.
+    #   * `^hwloc+cuda` -> -cuda as well: pmix and prrte appear twice with
+    #     IDENTICAL variants, differing only in which hwloc they were built
+    #     against. This used to be solved with hash_length 7 on GPU builds, but
+    #     that gave every module of a GPU run a different name from the same
+    #     module of a CPU run, so one flat folder ended up with two modules per
+    #     version (testbed, 2026-11-24). Names are now the same in both, and a
+    #     later run updates a module in place. Hidden implicit modules
+    #     (hide_implicits) would have been the other way out, but Lmod 6.6 --
+    #     Ubuntu 22.04's -- aborts on the `module-hide` lines Spack writes.
+    #     Any clash that remains (two builds of an implicit dependency that no
+    #     projection can tell apart) is resolved per package at refresh time;
+    #     see module-names.py.
     if gpu_active:
         tcl = env["spack"]["modules"]["default"]["tcl"]
         tcl["projections"] = {
             "+cuda ^mpi": "{name}/{version}-{^mpi.name}-{^mpi.version}-cuda",
             "+cuda": "{name}/{version}-{compiler.name}-{compiler.version}-cuda",
+            "^hwloc+cuda": "{name}/{version}-{compiler.name}-{compiler.version}-cuda",
             **tcl.get("projections", {}),
         }
-        tcl["hash_length"] = 7
 
     if gpu_active and cuda_arch:
         all_cfg = env["spack"]["packages"].setdefault("all", {})
