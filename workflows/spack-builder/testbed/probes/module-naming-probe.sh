@@ -19,7 +19,9 @@ type module >/dev/null 2>&1 || . /usr/share/lmod/lmod/init/bash
 RUN="${1:-}"
 if [ -z "$RUN" ]; then
   for d in $(ls -d ~/pw/jobs/*/*/ 2>/dev/null | sort); do
-    [ "$(cat "$d/build/BUILD_STATUS" 2>/dev/null)" = 0 ] && grep -qE '^\s*- cuda\s*$' "$d/spack-env/spack.yaml" 2>/dev/null && RUN="${d%/}"
+    # A dry run (concretize_only) also exits 0 and writes modulepath.env, but
+    # installs and generates nothing: never pick one by default.
+    [ "$(cat "$d/build/BUILD_STATUS" 2>/dev/null)" = 0 ] && grep -qE '^\s*- cuda\s*$' "$d/spack-env/spack.yaml" 2>/dev/null && ! grep -qs 'service_concretize_only="true"' "$d/inputs.sh" && RUN="${d%/}"
   done
 fi
 [ -n "$RUN" ] || { echo "no successful GPU build found"; exit 2; }
